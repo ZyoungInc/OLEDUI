@@ -206,28 +206,82 @@ bool frame_is_drawed = false;
 uint8_t* buf_ptr;
 uint16_t buf_len;
 
-//选择界面变量
-uint8_t x;
-int16_t y, y_trg;                  //目标和当前
-uint8_t line_y, line_y_trg;        //线的位置
-uint8_t box_width, box_width_trg;  //框的宽度
-int16_t box_y, box_y_trg;          //框的当前值和目标值
-int8_t ui_select;                  //当前选中那一栏
+struct ProgressState {
+  uint8_t value = 0;
+  uint8_t target = 0;
+  uint8_t segment = 0;
+};
 
-//pid界面变量
-//int8_t pid_y,pid_y_trg;
-uint8_t pid_line_y, pid_line_y_trg;        //线的位置
-uint8_t pid_box_width, pid_box_width_trg;  //框的宽度
-int16_t pid_box_y, pid_box_y_trg;          //框的当前值和目标值
-int8_t pid_select;                         //当前选中那一栏
+// MenuState/ProgressState 等封装了界面运行时所需的动画和位置数据，方便未来增加新的界面或输入方式
+struct MenuState {
+  uint8_t paddingX = 0;
+  int16_t offset = 0;
+  int16_t targetOffset = 0;
+  uint8_t boxWidth = 0;
+  uint8_t targetBoxWidth = 0;
+  int16_t boxY = 0;
+  int16_t targetBoxY = 0;
+  ProgressState progress;
+  int8_t selected = 0;
+};
 
-//icon界面变量
-int16_t icon_x, icon_x_trg;
-int16_t app_y, app_y_trg;
+struct IconState {
+  int16_t x = 0;
+  int16_t targetX = 0;
+  int16_t y = 0;
+  int16_t targetY = 0;
+  int8_t selected = 0;
+};
 
-int8_t icon_select;
+struct TextEditorState {
+  uint8_t cursor = 0;
+  bool editing = false;
+  uint8_t blink = 0;
+};
 
-uint8_t ui_index, ui_state;
+struct UiContext {
+  uint8_t currentPage = 0;
+  uint8_t state = 0;
+};
+
+MenuState mainMenu;
+MenuState pidMenu;
+IconState iconState;
+TextEditorState textEditor;
+UiContext ui;
+
+//兼容旧变量名称，逐步迁移
+uint8_t& x = mainMenu.paddingX;
+int16_t& y = mainMenu.offset;
+int16_t& y_trg = mainMenu.targetOffset;
+uint8_t& line_y = mainMenu.progress.value;
+uint8_t& line_y_trg = mainMenu.progress.target;
+uint8_t& box_width = mainMenu.boxWidth;
+uint8_t& box_width_trg = mainMenu.targetBoxWidth;
+int16_t& box_y = mainMenu.boxY;
+int16_t& box_y_trg = mainMenu.targetBoxY;
+int8_t& ui_select = mainMenu.selected;
+
+uint8_t& pid_line_y = pidMenu.progress.value;
+uint8_t& pid_line_y_trg = pidMenu.progress.target;
+uint8_t& pid_box_width = pidMenu.boxWidth;
+uint8_t& pid_box_width_trg = pidMenu.targetBoxWidth;
+int16_t& pid_box_y = pidMenu.boxY;
+int16_t& pid_box_y_trg = pidMenu.targetBoxY;
+int8_t& pid_select = pidMenu.selected;
+
+int16_t& icon_x = iconState.x;
+int16_t& icon_x_trg = iconState.targetX;
+int16_t& app_y = iconState.y;
+int16_t& app_y_trg = iconState.targetY;
+int8_t& icon_select = iconState.selected;
+
+uint8_t& ui_index = ui.currentPage;
+uint8_t& ui_state = ui.state;
+
+uint8_t& edit_index = textEditor.cursor;
+bool& edit_flag = textEditor.editing;
+uint8_t& blink_flag = textEditor.blink;
 
 
 enum  //ui_index
@@ -257,21 +311,20 @@ enum  //ui_state
 //const char* text="This is a text Hello world ! follow up one two three four may jun july";
 
 //菜单结构体
-typedef struct
-{
-  char* select;
-} SELECT_LIST;
+struct MenuItem {
+  const char* label;
+};
 
-SELECT_LIST pid[] = {
+MenuItem pid[] = {
   { "-Proportion" },
   { "-Integral" },
   { "-Derivative" },
   { "Return" },
 };
 
-uint8_t pid_num = sizeof(pid) / sizeof(SELECT_LIST);  //PID选项数量
+uint8_t pid_num = sizeof(pid) / sizeof(MenuItem);  //PID选项数量
 
-SELECT_LIST list[] = {
+MenuItem list[] = {
   { "MainUI" },
   { "+PID Editor" },
   { "-Icon Test" },
@@ -281,11 +334,11 @@ SELECT_LIST list[] = {
   { "{ About }" },
 };
 
-uint8_t list_num = sizeof(list) / sizeof(SELECT_LIST);  //选择界面数量
+uint8_t list_num = sizeof(list) / sizeof(MenuItem);  //选择界面数量
 uint8_t single_line_length = 63 / list_num;
 uint8_t total_line_length = single_line_length * list_num + 1;
 
-SELECT_LIST icon[] = {
+MenuItem icon[] = {
   { "Likes" },
   { "Collection" },
   { "Slot" },
@@ -296,95 +349,109 @@ SELECT_LIST icon[] = {
 char name[] = "Hello World ";
 //允许名字的最大长度
 const uint8_t name_len = 12;  //0-11for name  12 for return
-uint8_t edit_index = 0;
-bool edit_flag = false;          //默认不在编辑
-uint8_t blink_flag;              //默认高亮
 const uint8_t BLINK_SPEED = 16;  //2的倍数
 
-uint8_t icon_num = sizeof(icon) / sizeof(SELECT_LIST);
+uint8_t icon_num = sizeof(icon) / sizeof(MenuItem);
 
-//按键变量
-typedef struct
-{
-  bool val;
-  bool last_val;
-} KEY;
+// Input 命名空间封装了按钮扫描逻辑，后续可以在这里接入编码器等其他输入设备
+namespace Input {
 
-KEY key[4] = { false };
+enum class Button : uint8_t {
+  Up = 0,
+  Down,
+  Confirm,
+  Back,
+  Count
+};
 
-//按键信息
-typedef struct
-{
-  uint8_t id;
-  bool pressed;
-} KEY_MSG;
+struct ButtonState {
+  bool value = true;
+  unsigned long repeatStart = 0;
+};
 
-KEY_MSG key_msg = { 0 };
-bool get_key_val(uint8_t ch) {
-  switch (ch) {
-    case 0:
-      return digitalRead(BTN0);
-    case 1:
-      return digitalRead(BTN1);
-    case 2:
-      return digitalRead(BTN2);
-    case 3:
-      return digitalRead(BTN3);  // 获取返回按钮的状态
-    default:
-      return false;  // 如果ch不是0、1、2或3，返回false
+struct Message {
+  uint8_t id = 0;
+  bool pressed = false;
+};
+
+class Manager {
+ public:
+  void begin();
+  void update();
+  Message consume();
+  bool hasEvent() const { return message.pressed; }
+
+ private:
+  static bool isRepeatButton(uint8_t id);
+  bool read(Button button) const;
+  void pushEvent(uint8_t id);
+
+  ButtonState buttons[static_cast<uint8_t>(Button::Count)];
+  Message message;
+};
+
+Manager controller;
+
+constexpr unsigned long kDebounceDelay = 100;
+constexpr uint8_t buttonPins[] = { BTN0, BTN1, BTN2, BTN3 };
+
+void Manager::begin() {
+  for (uint8_t i = 0; i < static_cast<uint8_t>(Button::Count); ++i) {
+    buttons[i].value = read(static_cast<Button>(i));
+    buttons[i].repeatStart = millis();
+  }
+  message = {};
+}
+
+bool Manager::isRepeatButton(uint8_t id) {
+  return id == static_cast<uint8_t>(Button::Up) || id == static_cast<uint8_t>(Button::Down);
+}
+
+bool Manager::read(Button button) const {
+  return digitalRead(buttonPins[static_cast<uint8_t>(button)]);
+}
+
+void Manager::pushEvent(uint8_t id) {
+  message.id = id;
+  message.pressed = true;
+}
+
+void Manager::update() {
+  unsigned long now = millis();
+  for (uint8_t i = 0; i < static_cast<uint8_t>(Button::Count); ++i) {
+    bool current = read(static_cast<Button>(i));
+    auto& state = buttons[i];
+    if (current != state.value) {
+      state.value = current;
+      state.repeatStart = now;
+      if (current == LOW) {
+        pushEvent(i);
+      }
+    } else if (current == LOW && isRepeatButton(i) && (now - state.repeatStart >= kDebounceDelay)) {
+      pushEvent(i);
+      state.repeatStart = now;
+    }
   }
 }
+
+Message Manager::consume() {
+  Message result = message;
+  message.pressed = false;
+  return result;
+}
+
+}  // namespace Input
+
+Input::Message key_msg;
 
 void key_init() {
-  for (uint8_t i = 0; i < (sizeof(key) / sizeof(KEY)); ++i) {
-    key[i].val = key[i].last_val = get_key_val(i);
-  }
+  Input::controller.begin();
 }
-
-unsigned long last_press_time = 0;
-const unsigned long debounce_delay = 100;  // 防抖时间
 
 void key_scan() {
-  unsigned long current_time = millis();
-
-  for (uint8_t i = 0; i < (sizeof(key) / sizeof(KEY)); ++i) {
-    key[i].val = get_key_val(i);  // 获取按钮值
-
-    // 对于上下滚动按钮，持续按下时触发
-    if (i == 0 || i == 1) {               // 假设按钮 0 和 1 是上下滚动按钮
-      if (key[i].last_val != key[i].val)  // 检测到按键状态变化
-      {
-        key[i].last_val = key[i].val;  // 更新状态
-        if (key[i].val == LOW)         // 如果按钮被按下
-        {
-          key_msg.id = i;
-          key_msg.pressed = true;
-          last_press_time = current_time;
-        }
-      } else if (key[i].val == LOW && (current_time - last_press_time > debounce_delay)) {
-        // 持续按下时触发滚动
-        key_msg.id = i;
-        key_msg.pressed = true;
-        last_press_time = current_time;
-      }
-    }
-    // 对于确认和返回按钮，只在状态变化时触发一次
-    else if (i == 2 || i == 3) {          // 假设按钮 2 和 3 是确认和返回按钮
-      if (key[i].last_val != key[i].val)  // 检测到按键状态变化
-      {
-        key[i].last_val = key[i].val;  // 更新状态
-        if (key[i].val == LOW)         // 如果按钮被按下
-        {
-          key_msg.id = i;
-          key_msg.pressed = true;
-          last_press_time = current_time;
-        }
-      }
-    }
-  }
+  Input::controller.update();
+  key_msg = Input::controller.consume();
 }
-
-
 
 
 //移动函数
@@ -416,51 +483,69 @@ bool move_icon(int16_t* a, int16_t* a_trg) {
 }
 
 //宽度移动函数
-bool move_width(uint8_t* a, uint8_t* a_trg, uint8_t select, uint8_t id) {
-  if (*a < *a_trg) {
-    uint8_t step = 16 / SPEED;  //判断步数
-    uint8_t len;
-    if (ui_index == M_SELECT) {
-      len = abs(u8g2.getStrWidth(list[select].select) - u8g2.getStrWidth(list[id == 0 ? select + 1 : select - 1].select));
-    } else if (ui_index == M_PID) {
-      len = abs(u8g2.getStrWidth(pid[select].select) - u8g2.getStrWidth(pid[id == 0 ? select + 1 : select - 1].select));
-    }
-    uint8_t width_speed = ((len % step) == 0 ? (len / step) : (len / step + 1));  //计算步长
-    *a += width_speed;
-    if (*a > *a_trg) *a = *a_trg;  //
-  } else if (*a > *a_trg) {
-    uint8_t step = 16 / SPEED;  //判断步数
-    uint8_t len;
-    if (ui_index == M_SELECT) {
-      len = abs(u8g2.getStrWidth(list[select].select) - u8g2.getStrWidth(list[id == 0 ? select + 1 : select - 1].select));
-    } else if (ui_index == M_PID) {
-      len = abs(u8g2.getStrWidth(pid[select].select) - u8g2.getStrWidth(pid[id == 0 ? select + 1 : select - 1].select));
-    }
-    uint8_t width_speed = ((len % step) == 0 ? (len / step) : (len / step + 1));  //计算步长
-    *a -= width_speed;
-    if (*a < *a_trg) *a = *a_trg;
-  } else {
-    return true;  //到达目标
+bool move_width(uint8_t& value, uint8_t& target, const MenuItem* items, uint8_t count, uint8_t select, uint8_t keyId) {
+  if (count == 0) {
+    value = target = 0;
+    return true;
   }
-  return false;  //未到达
+
+  auto clampIndex = [&](int16_t index) {
+    if (index < 0) return int16_t(0);
+    if (index >= count) return int16_t(count - 1);
+    return index;
+  };
+
+  int16_t neighborIndex = select;
+  if (keyId == static_cast<uint8_t>(Input::Button::Up)) {
+    neighborIndex = clampIndex(select + 1);
+  } else if (keyId == static_cast<uint8_t>(Input::Button::Down)) {
+    neighborIndex = clampIndex(select - 1);
+  }
+
+  auto widthOf = [&](int16_t index) {
+    return u8g2.getStrWidth(items[index].label);
+  };
+
+  uint8_t step = 16 / SPEED;
+  uint8_t len = abs(widthOf(select) - widthOf(neighborIndex));
+  uint8_t width_speed = step == 0 ? 0 : ((len % step) == 0 ? (len / step) : (len / step + 1));
+
+  if (value < target) {
+    value += width_speed;
+    if (value > target) value = target;
+  } else if (value > target) {
+    value -= width_speed;
+    if (value < target) value = target;
+  } else {
+    return true;
+  }
+  return false;
 }
 
 //进度条移动函数
-bool move_bar(uint8_t* a, uint8_t* a_trg) {
-  if (*a < *a_trg) {
-    uint8_t step = 16 / SPEED;                                                                                                 //判断步数
-    uint8_t width_speed = ((single_line_length % step) == 0 ? (single_line_length / step) : (single_line_length / step + 1));  //计算步长
-    *a += width_speed;
-    if (*a > *a_trg) *a = *a_trg;  //
-  } else if (*a > *a_trg) {
-    uint8_t step = 16 / SPEED;                                                                                                 //判断步数
-    uint8_t width_speed = ((single_line_length % step) == 0 ? (single_line_length / step) : (single_line_length / step + 1));  //计算步长
-    *a -= width_speed;
-    if (*a < *a_trg) *a = *a_trg;
-  } else {
-    return true;  //到达目标
+bool move_bar(ProgressState& progress) {
+  if (progress.segment == 0) {
+    progress.value = progress.target;
+    return true;
   }
-  return false;  //未到达
+
+  uint8_t step = 16 / SPEED;
+  uint8_t width_speed = step == 0 ? 0 : ((progress.segment % step) == 0 ? (progress.segment / step) : (progress.segment / step + 1));
+
+  if (progress.value < progress.target) {
+    progress.value += width_speed;
+    if (progress.value > progress.target) progress.value = progress.target;
+  } else if (progress.value > progress.target) {
+    progress.value -= width_speed;
+    if (progress.value < progress.target) progress.value = progress.target;
+  } else {
+    return true;
+  }
+  return false;
+}
+
+uint8_t calculate_menu_width(const MenuItem* items, uint8_t index, uint8_t padding) {
+  return u8g2.getStrWidth(items[index].label) + padding * 2;
 }
 
 //文字编辑函数
@@ -556,15 +641,15 @@ void logo_ui_show()  //显示logo{
 }
 
 void select_ui_show()  //选择界面{
-  move_bar(&line_y, &line_y_trg);
+  move_bar(mainMenu.progress);
 move(&y, &y_trg);
 move(&box_y, &box_y_trg);
-move_width(&box_width, &box_width_trg, ui_select, key_msg.id);
+move_width(box_width, box_width_trg, list, list_num, ui_select, key_msg.id);
 u8g2.drawVLine(126, 0, total_line_length);
 u8g2.drawPixel(125, 0);
 u8g2.drawPixel(127, 0);
 for (uint8_t i = 0; i < list_num; ++i) {
-  u8g2.drawStr(x, 16 * i + y + 12, list[i].select);  // 第一段输出位置
+  u8g2.drawStr(x, 16 * i + y + 12, list[i].label);  // 第一段输出位置
   u8g2.drawPixel(125, single_line_length * (i + 1));
   u8g2.drawPixel(127, single_line_length * (i + 1));
 }
@@ -576,14 +661,14 @@ u8g2.setDrawColor(1);
 }
 
 void pid_ui_show()  //PID界面{
-  move_bar(&pid_line_y, &pid_line_y_trg);
+  move_bar(pidMenu.progress);
 move(&pid_box_y, &pid_box_y_trg);
-move_width(&pid_box_width, &pid_box_width_trg, pid_select, key_msg.id);
+move_width(pid_box_width, pid_box_width_trg, pid, pid_num, pid_select, key_msg.id);
 u8g2.drawVLine(126, 0, 61);
 u8g2.drawPixel(125, 0);
 u8g2.drawPixel(127, 0);
 for (uint8_t i = 0; i < pid_num; ++i) {
-  u8g2.drawStr(x, 16 * i + 12, pid[i].select);  // 第一段输出位置
+  u8g2.drawStr(x, 16 * i + 12, pid[i].label);  // 第一段输出位置
   u8g2.drawPixel(125, 15 * (i + 1));
   u8g2.drawPixel(127, 15 * (i + 1));
 }
@@ -632,7 +717,7 @@ move(&app_y, &app_y_trg);
 for (uint8_t i = 0; i < icon_num; ++i) {
   u8g2.drawXBMP(46 + icon_x + i * ICON_SPACE, 6, 36, icon_width[i], icon_pic[i]);
   u8g2.setClipWindow(0, 48, 128, 64);
-  u8g2.drawStr((128 - u8g2.getStrWidth(icon[i].select)) / 2, 62 - app_y + i * 16, icon[i].select);
+  u8g2.drawStr((128 - u8g2.getStrWidth(icon[i].label)) / 2, 62 - app_y + i * 16, icon[i].label);
   u8g2.setMaxClipWindow();
 }
 }
@@ -814,7 +899,7 @@ void pid_proc()  //pid界面处理函数
           pid_select = 0;
           pid_line_y = pid_line_y_trg = 1;
           pid_box_y = pid_box_y_trg = 0;
-          pid_box_width = pid_box_width_trg = u8g2.getStrWidth(pid[pid_select].select) + x * 2;
+          pid_box_width = pid_box_width_trg = calculate_menu_width(pid, pid_select, x);
         } else {
           ui_index = M_PID_EDIT;
         }
@@ -822,7 +907,7 @@ void pid_proc()  //pid界面处理函数
       default:
         break;
     }
-    pid_box_width_trg = u8g2.getStrWidth(pid[pid_select].select) + x * 2;
+    pid_box_width_trg = calculate_menu_width(pid, pid_select, x);
   }
 }
 
@@ -842,7 +927,7 @@ void select_proc(void)  // 选择界面处理
         }
         break;
       case 1:  // 按下按钮 1
-        if ((ui_select + 2) > (sizeof(list) / sizeof(SELECT_LIST))) break;
+        if ((ui_select + 2) > (list_num)) break;
         ui_select += 1;
         line_y_trg += single_line_length;
         if ((ui_select + 1) > (4 - y / 16)) {
@@ -888,7 +973,7 @@ void select_proc(void)  // 选择界面处理
       default:
         break;
     }
-    box_width_trg = u8g2.getStrWidth(list[ui_select].select) + x * 2;
+    box_width_trg = calculate_menu_width(list, ui_select, x);
   }
   select_ui_show();
 }
@@ -1054,6 +1139,9 @@ void setup() {
   buf_ptr = u8g2.getBufferPtr();  //拿到buffer首地址
   buf_len = 8 * u8g2.getBufferTileHeight() * u8g2.getBufferTileWidth();
 
+  mainMenu.progress.segment = single_line_length;
+  pidMenu.progress.segment = 15;
+
   x = 4;
   y = y_trg = 0;
   line_y = line_y_trg = 1;
@@ -1062,8 +1150,8 @@ void setup() {
   icon_x = icon_x_trg = 0;
   app_y = app_y_trg = 0;
 
-  box_width = box_width_trg = u8g2.getStrWidth(list[ui_select].select) + x * 2;          //两边各多2
-  pid_box_width = pid_box_width_trg = u8g2.getStrWidth(pid[pid_select].select) + x * 2;  //两边各多2
+  box_width = box_width_trg = calculate_menu_width(list, ui_select, x);          //两边各多2
+  pid_box_width = pid_box_width_trg = calculate_menu_width(pid, pid_select, x);  //两边各多2
 
   ui_index = M_LOGO;
   //ui_index=M_TEXT_EDIT;
