@@ -42,6 +42,8 @@ struct IconItem {
   const char* label;
 };
 
+using LabelProvider = const char* (*)(uint8_t index);
+
 // 菜单显示状态集中管理，便于在不同输入设备之间复用
 struct MenuState {
   int16_t scroll = 0;
@@ -442,8 +444,6 @@ bool move_icon(int16_t* a, int16_t* a_trg) {
   return false;  //未到达
 }
 
-typedef const char* (*LabelProvider)(uint8_t index);
-
 const char* getMainMenuLabel(uint8_t index) {
   return kMainMenu[index].label;
 }
@@ -591,7 +591,7 @@ void disappear() {
 
 /**************************界面显示*******************************/
 
-void logo_ui_show()  //显示logo{
+void logo_ui_show() {  //显示logo
   u8g2.drawXBMP(0, 0, 128, 64, LOGO);
 
 // for(uint16_t i=0;i<buf_len;++i)
