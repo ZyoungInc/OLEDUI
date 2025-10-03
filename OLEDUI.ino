@@ -1,15 +1,62 @@
 #include <U8g2lib.h>
 
-#define SPEED 2  //16的因数
+#define SPEED 2  // 16的因数
 #define ICON_SPEED 8
-#define ICON_SPACE 48  //图标间隔，speed倍数
+#define ICON_SPACE 48  // 图标间隔，speed 倍数
 
-#define BTN3 D3  //back*
-#define BTN0 8   //up
-#define BTN1 9   //down
-#define BTN2 10  //ok#
+#define BTN3 D3  // back
+#define BTN0 8   // up
+#define BTN1 9   // down
+#define BTN2 10  // ok
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* clock=*/D5, /* data=*/D4);
+
+enum class InputAction : uint8_t {
+  None,
+  Up,
+  Down,
+  Select,
+  Back,
+};
+
+struct InputEvent {
+  InputAction action = InputAction::None;
+  bool repeated = false;
+};
+
+// 菜单项定义，关联标题与切换目标，方便扩展新的页面
+struct MenuItem {
+  const char* label;
+  uint8_t targetPage;  // 使用 ui_index 枚举值
+};
+
+struct PidMenuItem {
+  const char* label;
+  bool editable;
+};
+
+struct IconItem {
+  const uint8_t* bitmap;
+  uint8_t width;
+  uint8_t height;
+  const char* label;
+};
+
+// 菜单显示状态集中管理，便于在不同输入设备之间复用
+struct MenuState {
+  int16_t scroll = 0;
+  int16_t scrollTarget = 0;
+  uint8_t indicatorY = 0;
+  uint8_t indicatorTarget = 0;
+  uint8_t boxWidth = 0;
+  uint8_t boxWidthTarget = 0;
+  int16_t boxY = 0;
+  int16_t boxYTarget = 0;
+  int8_t selected = 0;
+};
+
+InputEvent g_inputEvent;
+InputAction g_lastMenuDirection = InputAction::None;
 
 PROGMEM const uint8_t icon_pic[][200]{
   {
@@ -198,33 +245,19 @@ float Kpid[3] = { 9.97, 0.2, 0.01 };  //Kp,Ki,Kd
 uint8_t disappear_step = 1;
 
 float angle, angle_last;
-//实时坐标
 uint8_t chart_x;
 bool frame_is_drawed = false;
 
-//指向buf首地址的指针
 uint8_t* buf_ptr;
 uint16_t buf_len;
 
-//选择界面变量
-uint8_t x;
-int16_t y, y_trg;                  //目标和当前
-uint8_t line_y, line_y_trg;        //线的位置
-uint8_t box_width, box_width_trg;  //框的宽度
-int16_t box_y, box_y_trg;          //框的当前值和目标值
-int8_t ui_select;                  //当前选中那一栏
+MenuState mainMenuState;
+MenuState pidMenuState;
 
-//pid界面变量
-//int8_t pid_y,pid_y_trg;
-uint8_t pid_line_y, pid_line_y_trg;        //线的位置
-uint8_t pid_box_width, pid_box_width_trg;  //框的宽度
-int16_t pid_box_y, pid_box_y_trg;          //框的当前值和目标值
-int8_t pid_select;                         //当前选中那一栏
+const uint8_t kMenuTextOffsetX = 4;
 
-//icon界面变量
 int16_t icon_x, icon_x_trg;
-int16_t app_y, app_y_trg;
-
+int16_t icon_label_offset, icon_label_offset_trg;
 int8_t icon_select;
 
 uint8_t ui_index, ui_state;
@@ -256,41 +289,42 @@ enum  //ui_state
 
 //const char* text="This is a text Hello world ! follow up one two three four may jun july";
 
-//菜单结构体
-typedef struct
-{
-  char* select;
-} SELECT_LIST;
-
-SELECT_LIST pid[] = {
-  { "-Proportion" },
-  { "-Integral" },
-  { "-Derivative" },
-  { "Return" },
+const PidMenuItem kPidMenu[] = {
+  { "-Proportion", true },
+  { "-Integral", true },
+  { "-Derivative", true },
+  { "Return", false },
 };
 
-uint8_t pid_num = sizeof(pid) / sizeof(SELECT_LIST);  //PID选项数量
+const uint8_t kPidMenuCount = sizeof(kPidMenu) / sizeof(PidMenuItem);
 
-SELECT_LIST list[] = {
-  { "MainUI" },
-  { "+PID Editor" },
-  { "-Icon Test" },
-  { "-Chart Test" },
-  { "-Text Edit" },
-  { "-Play Video" },
-  { "{ About }" },
+// 主菜单配置，可直接在此处增删条目
+const MenuItem kMainMenu[] = {
+  { "MainUI", M_LOGO },
+  { "+PID Editor", M_PID },
+  { "-Icon Test", M_ICON },
+  { "-Chart Test", M_CHART },
+  { "-Text Edit", M_TEXT_EDIT },
+  { "-Play Video", M_VIDEO },
+  { "{ About }", M_ABOUT },
 };
 
-uint8_t list_num = sizeof(list) / sizeof(SELECT_LIST);  //选择界面数量
-uint8_t single_line_length = 63 / list_num;
-uint8_t total_line_length = single_line_length * list_num + 1;
+const uint8_t kMainMenuCount = sizeof(kMainMenu) / sizeof(MenuItem);
+const uint8_t kMainMenuLineSegment = 63 / kMainMenuCount;
+const uint8_t kMainMenuLineTotal = kMainMenuLineSegment * kMainMenuCount + 1;
+const uint8_t kMainMenuVisibleRows = 4;
 
-SELECT_LIST icon[] = {
-  { "Likes" },
-  { "Collection" },
-  { "Slot" },
-  { "Share" },
+const uint8_t kPidLineSegment = 15;
+
+// 图标资源配置，集中管理图片与标题
+const IconItem kIconMenu[] = {
+  { icon_pic[0], 36, 35, "Likes" },
+  { icon_pic[1], 36, 37, "Collection" },
+  { icon_pic[2], 36, 36, "Slot" },
+  { icon_pic[3], 36, 36, "Share" },
 };
+
+const uint8_t kIconCount = sizeof(kIconMenu) / sizeof(IconItem);
 
 //设备名称
 char name[] = "Hello World ";
@@ -301,8 +335,6 @@ bool edit_flag = false;          //默认不在编辑
 uint8_t blink_flag;              //默认高亮
 const uint8_t BLINK_SPEED = 16;  //2的倍数
 
-uint8_t icon_num = sizeof(icon) / sizeof(SELECT_LIST);
-
 //按键变量
 typedef struct
 {
@@ -312,14 +344,6 @@ typedef struct
 
 KEY key[4] = { false };
 
-//按键信息
-typedef struct
-{
-  uint8_t id;
-  bool pressed;
-} KEY_MSG;
-
-KEY_MSG key_msg = { 0 };
 bool get_key_val(uint8_t ch) {
   switch (ch) {
     case 0:
@@ -341,47 +365,50 @@ void key_init() {
   }
 }
 
-unsigned long last_press_time = 0;
 const unsigned long debounce_delay = 100;  // 防抖时间
 
-void key_scan() {
+InputAction actionFromKeyIndex(uint8_t index) {
+  switch (index) {
+    case 0:
+      return InputAction::Up;
+    case 1:
+      return InputAction::Down;
+    case 2:
+      return InputAction::Select;
+    case 3:
+      return InputAction::Back;
+    default:
+      return InputAction::None;
+  }
+}
+
+// 统一的输入轮询，后续可替换为编码器或其他设备，仅需在此处映射动作
+InputEvent pollInput() {
+  static unsigned long lastRepeatTime[4] = { 0 };
+  InputEvent event;
   unsigned long current_time = millis();
 
   for (uint8_t i = 0; i < (sizeof(key) / sizeof(KEY)); ++i) {
-    key[i].val = get_key_val(i);  // 获取按钮值
+    bool value = get_key_val(i);
+    key[i].val = value;
 
-    // 对于上下滚动按钮，持续按下时触发
-    if (i == 0 || i == 1) {               // 假设按钮 0 和 1 是上下滚动按钮
-      if (key[i].last_val != key[i].val)  // 检测到按键状态变化
-      {
-        key[i].last_val = key[i].val;  // 更新状态
-        if (key[i].val == LOW)         // 如果按钮被按下
-        {
-          key_msg.id = i;
-          key_msg.pressed = true;
-          last_press_time = current_time;
-        }
-      } else if (key[i].val == LOW && (current_time - last_press_time > debounce_delay)) {
-        // 持续按下时触发滚动
-        key_msg.id = i;
-        key_msg.pressed = true;
-        last_press_time = current_time;
+    if (value != key[i].last_val) {
+      key[i].last_val = value;
+      if (value == LOW) {
+        lastRepeatTime[i] = current_time;
+        event.action = actionFromKeyIndex(i);
+        event.repeated = false;
+        return event;
       }
-    }
-    // 对于确认和返回按钮，只在状态变化时触发一次
-    else if (i == 2 || i == 3) {          // 假设按钮 2 和 3 是确认和返回按钮
-      if (key[i].last_val != key[i].val)  // 检测到按键状态变化
-      {
-        key[i].last_val = key[i].val;  // 更新状态
-        if (key[i].val == LOW)         // 如果按钮被按下
-        {
-          key_msg.id = i;
-          key_msg.pressed = true;
-          last_press_time = current_time;
-        }
-      }
+    } else if ((i == 0 || i == 1) && value == LOW && (current_time - lastRepeatTime[i] > debounce_delay)) {
+      lastRepeatTime[i] = current_time;
+      event.action = actionFromKeyIndex(i);
+      event.repeated = true;
+      return event;
     }
   }
+
+  return event;
 }
 
 
@@ -415,52 +442,77 @@ bool move_icon(int16_t* a, int16_t* a_trg) {
   return false;  //未到达
 }
 
-//宽度移动函数
-bool move_width(uint8_t* a, uint8_t* a_trg, uint8_t select, uint8_t id) {
-  if (*a < *a_trg) {
-    uint8_t step = 16 / SPEED;  //判断步数
-    uint8_t len;
-    if (ui_index == M_SELECT) {
-      len = abs(u8g2.getStrWidth(list[select].select) - u8g2.getStrWidth(list[id == 0 ? select + 1 : select - 1].select));
-    } else if (ui_index == M_PID) {
-      len = abs(u8g2.getStrWidth(pid[select].select) - u8g2.getStrWidth(pid[id == 0 ? select + 1 : select - 1].select));
-    }
-    uint8_t width_speed = ((len % step) == 0 ? (len / step) : (len / step + 1));  //计算步长
-    *a += width_speed;
-    if (*a > *a_trg) *a = *a_trg;  //
-  } else if (*a > *a_trg) {
-    uint8_t step = 16 / SPEED;  //判断步数
-    uint8_t len;
-    if (ui_index == M_SELECT) {
-      len = abs(u8g2.getStrWidth(list[select].select) - u8g2.getStrWidth(list[id == 0 ? select + 1 : select - 1].select));
-    } else if (ui_index == M_PID) {
-      len = abs(u8g2.getStrWidth(pid[select].select) - u8g2.getStrWidth(pid[id == 0 ? select + 1 : select - 1].select));
-    }
-    uint8_t width_speed = ((len % step) == 0 ? (len / step) : (len / step + 1));  //计算步长
-    *a -= width_speed;
-    if (*a < *a_trg) *a = *a_trg;
-  } else {
-    return true;  //到达目标
-  }
-  return false;  //未到达
+typedef const char* (*LabelProvider)(uint8_t index);
+
+const char* getMainMenuLabel(uint8_t index) {
+  return kMainMenu[index].label;
 }
 
-//进度条移动函数
-bool move_bar(uint8_t* a, uint8_t* a_trg) {
-  if (*a < *a_trg) {
-    uint8_t step = 16 / SPEED;                                                                                                 //判断步数
-    uint8_t width_speed = ((single_line_length % step) == 0 ? (single_line_length / step) : (single_line_length / step + 1));  //计算步长
-    *a += width_speed;
-    if (*a > *a_trg) *a = *a_trg;  //
-  } else if (*a > *a_trg) {
-    uint8_t step = 16 / SPEED;                                                                                                 //判断步数
-    uint8_t width_speed = ((single_line_length % step) == 0 ? (single_line_length / step) : (single_line_length / step + 1));  //计算步长
-    *a -= width_speed;
-    if (*a < *a_trg) *a = *a_trg;
-  } else {
-    return true;  //到达目标
+const char* getPidMenuLabel(uint8_t index) {
+  return kPidMenu[index].label;
+}
+
+bool move_width(uint8_t* current, uint8_t* target, uint8_t selected, InputAction direction, LabelProvider labelProvider, uint8_t itemCount) {
+  if (itemCount == 0) {
+    return true;
   }
-  return false;  //未到达
+
+  auto labelWidth = [](const char* text) -> uint8_t {
+    return text ? u8g2.getStrWidth(text) : 0;
+  };
+
+  int8_t neighborIndex = -1;
+  if (direction == InputAction::Up) {
+    neighborIndex = (selected + 1 < itemCount) ? selected + 1 : selected;
+  } else if (direction == InputAction::Down) {
+    neighborIndex = (selected > 0) ? selected - 1 : selected;
+  }
+
+  uint8_t selectedWidth = labelWidth(labelProvider(selected));
+  uint8_t neighborWidth = (neighborIndex >= 0) ? labelWidth(labelProvider(neighborIndex)) : selectedWidth;
+  uint8_t step = 16 / SPEED;
+  uint8_t diff = abs(selectedWidth - neighborWidth);
+  uint8_t width_speed = (diff % step == 0) ? (diff / step) : (diff / step + 1);
+  if (width_speed == 0) {
+    width_speed = 1;
+  }
+
+  if (*current < *target) {
+    *current += width_speed;
+    if (*current > *target) {
+      *current = *target;
+    }
+  } else if (*current > *target) {
+    *current -= width_speed;
+    if (*current < *target) {
+      *current = *target;
+    }
+  } else {
+    return true;
+  }
+
+  return false;
+}
+
+bool move_indicator(uint8_t* current, uint8_t* target, uint8_t segmentLength) {
+  uint8_t step = 16 / SPEED;
+  uint8_t delta = (segmentLength % step == 0) ? (segmentLength / step) : (segmentLength / step + 1);
+
+  if (*current < *target) {
+    *current += delta;
+    if (*current > *target) {
+      *current = *target;
+    }
+  } else if (*current > *target) {
+    *current -= delta;
+    if (*current < *target) {
+      *current = *target;
+    }
+  } else {
+    return true;
+  }
+
+  return false;
 }
 
 //文字编辑函数
@@ -555,90 +607,93 @@ void logo_ui_show()  //显示logo{
 // }
 }
 
-void select_ui_show()  //选择界面{
-  move_bar(&line_y, &line_y_trg);
-move(&y, &y_trg);
-move(&box_y, &box_y_trg);
-move_width(&box_width, &box_width_trg, ui_select, key_msg.id);
-u8g2.drawVLine(126, 0, total_line_length);
-u8g2.drawPixel(125, 0);
-u8g2.drawPixel(127, 0);
-for (uint8_t i = 0; i < list_num; ++i) {
-  u8g2.drawStr(x, 16 * i + y + 12, list[i].select);  // 第一段输出位置
-  u8g2.drawPixel(125, single_line_length * (i + 1));
-  u8g2.drawPixel(127, single_line_length * (i + 1));
-}
-u8g2.drawVLine(125, line_y, single_line_length - 1);
-u8g2.drawVLine(127, line_y, single_line_length - 1);
-u8g2.setDrawColor(2);
-u8g2.drawRBox(0, box_y, box_width, 16, 1);
-u8g2.setDrawColor(1);
+void select_ui_show() {
+  move_indicator(&mainMenuState.indicatorY, &mainMenuState.indicatorTarget, kMainMenuLineSegment);
+  move(&mainMenuState.scroll, &mainMenuState.scrollTarget);
+  move(&mainMenuState.boxY, &mainMenuState.boxYTarget);
+  move_width(&mainMenuState.boxWidth, &mainMenuState.boxWidthTarget, mainMenuState.selected, g_lastMenuDirection, getMainMenuLabel, kMainMenuCount);
+
+  u8g2.drawVLine(126, 0, kMainMenuLineTotal);
+  u8g2.drawPixel(125, 0);
+  u8g2.drawPixel(127, 0);
+  for (uint8_t i = 0; i < kMainMenuCount; ++i) {
+    u8g2.drawStr(kMenuTextOffsetX, 16 * i + mainMenuState.scroll + 12, kMainMenu[i].label);
+    u8g2.drawPixel(125, kMainMenuLineSegment * (i + 1));
+    u8g2.drawPixel(127, kMainMenuLineSegment * (i + 1));
+  }
+
+  u8g2.drawVLine(125, mainMenuState.indicatorY, kMainMenuLineSegment - 1);
+  u8g2.drawVLine(127, mainMenuState.indicatorY, kMainMenuLineSegment - 1);
+  u8g2.setDrawColor(2);
+  u8g2.drawRBox(0, mainMenuState.boxY, mainMenuState.boxWidth, 16, 1);
+  u8g2.setDrawColor(1);
 }
 
-void pid_ui_show()  //PID界面{
-  move_bar(&pid_line_y, &pid_line_y_trg);
-move(&pid_box_y, &pid_box_y_trg);
-move_width(&pid_box_width, &pid_box_width_trg, pid_select, key_msg.id);
-u8g2.drawVLine(126, 0, 61);
-u8g2.drawPixel(125, 0);
-u8g2.drawPixel(127, 0);
-for (uint8_t i = 0; i < pid_num; ++i) {
-  u8g2.drawStr(x, 16 * i + 12, pid[i].select);  // 第一段输出位置
-  u8g2.drawPixel(125, 15 * (i + 1));
-  u8g2.drawPixel(127, 15 * (i + 1));
+void pid_ui_show() {
+  move_indicator(&pidMenuState.indicatorY, &pidMenuState.indicatorTarget, kPidLineSegment);
+  move(&pidMenuState.boxY, &pidMenuState.boxYTarget);
+  move_width(&pidMenuState.boxWidth, &pidMenuState.boxWidthTarget, pidMenuState.selected, g_lastMenuDirection, getPidMenuLabel, kPidMenuCount);
+
+  u8g2.drawVLine(126, 0, 61);
+  u8g2.drawPixel(125, 0);
+  u8g2.drawPixel(127, 0);
+  for (uint8_t i = 0; i < kPidMenuCount; ++i) {
+    u8g2.drawStr(kMenuTextOffsetX, 16 * i + 12, kPidMenu[i].label);
+    u8g2.drawPixel(125, kPidLineSegment * (i + 1));
+    u8g2.drawPixel(127, kPidLineSegment * (i + 1));
+  }
+
+  u8g2.setDrawColor(2);
+  u8g2.drawRBox(0, pidMenuState.boxY, pidMenuState.boxWidth, 16, 1);
+  u8g2.setDrawColor(1);
+  u8g2.drawVLine(125, pidMenuState.indicatorY, 14);
+  u8g2.drawVLine(127, pidMenuState.indicatorY, 14);
 }
 
-u8g2.setDrawColor(2);
-u8g2.drawRBox(0, pid_box_y, pid_box_width, 16, 1);
-u8g2.setDrawColor(1);
-u8g2.drawVLine(125, pid_line_y, 14);
-u8g2.drawVLine(127, pid_line_y, 14);
-}
-
-void pid_edit_ui_show()  //显示PID编辑{
+void pid_edit_ui_show() {  // 显示 PID 编辑界面
   u8g2.drawBox(16, 16, 96, 31);
-u8g2.setDrawColor(2);
-u8g2.drawBox(17, 17, 94, 29);
-u8g2.setDrawColor(1);
+  u8g2.setDrawColor(2);
+  u8g2.drawBox(17, 17, 94, 29);
+  u8g2.setDrawColor(1);
 
-//u8g2.drawBox(17,17,(int)(Kpid[pid_select]/PID_MAX)),30);
-u8g2.drawFrame(18, 36, 60, 8);
-u8g2.drawBox(20, 38, (uint8_t)(Kpid[pid_select] / PID_MAX * 56), 4);
+  //u8g2.drawBox(17,17,(int)(Kpid[pidMenuState.selected]/PID_MAX)),30);
+  u8g2.drawFrame(18, 36, 60, 8);
+  u8g2.drawBox(20, 38, (uint8_t)(Kpid[pidMenuState.selected] / PID_MAX * 56), 4);
 
-u8g2.setCursor(22, 30);
-switch (pid_select) {
-  case 0:
-    u8g2.print("Editing Kp");
-    break;
-  case 1:
-    u8g2.print("Editing Ki");
-    break;
-  case 2:
-    u8g2.print("Editing Kd");
-    break;
-  default:
-    break;
+  u8g2.setCursor(22, 30);
+  switch (pidMenuState.selected) {
+    case 0:
+      u8g2.print("Editing Kp");
+      break;
+    case 1:
+      u8g2.print("Editing Ki");
+      break;
+    case 2:
+      u8g2.print("Editing Kd");
+      break;
+    default:
+      break;
+  }
+
+  u8g2.setCursor(81, 44);
+  u8g2.print(Kpid[pidMenuState.selected]);
 }
 
-u8g2.setCursor(81, 44);
-u8g2.print(Kpid[pid_select]);
-}
-
-void icon_ui_show(void)  //显示icon{
-
+void icon_ui_show() {
   move_icon(&icon_x, &icon_x_trg);
-move(&app_y, &app_y_trg);
+  move(&icon_label_offset, &icon_label_offset_trg);
 
-for (uint8_t i = 0; i < icon_num; ++i) {
-  u8g2.drawXBMP(46 + icon_x + i * ICON_SPACE, 6, 36, icon_width[i], icon_pic[i]);
-  u8g2.setClipWindow(0, 48, 128, 64);
-  u8g2.drawStr((128 - u8g2.getStrWidth(icon[i].select)) / 2, 62 - app_y + i * 16, icon[i].select);
-  u8g2.setMaxClipWindow();
-}
+  for (uint8_t i = 0; i < kIconCount; ++i) {
+    const IconItem& item = kIconMenu[i];
+    u8g2.drawXBMP(46 + icon_x + i * ICON_SPACE, 6, item.width, item.height, item.bitmap);
+    u8g2.setClipWindow(0, 48, 128, 64);
+    u8g2.drawStr((128 - u8g2.getStrWidth(item.label)) / 2, 62 - icon_label_offset + i * 16, item.label);
+    u8g2.setMaxClipWindow();
+  }
 }
 
-void chart_ui_show() / {
-  / chart界面 if (!frame_is_drawed) {  //框架只画一遍
+void chart_ui_show() {
+  if (!frame_is_drawed) {
     u8g2.clearBuffer();
     chart_draw_frame();
     angle_last = 20.00 + (float)random(0, 1024) / 100.00;
@@ -646,18 +701,16 @@ void chart_ui_show() / {
   }
 
   u8g2.drawBox(96, 0, 30, 14);
-
   u8g2.drawVLine(chart_x + 10, 59, 3);
-  if (chart_x == 100) chart_x = 0;
-
-  //u8g2.drawBox(chart_x+11,24,8,32);
+  if (chart_x == 100) {
+    chart_x = 0;
+  }
 
   u8g2.drawVLine(chart_x + 11, 24, 34);
   u8g2.drawVLine(chart_x + 12, 24, 34);
   u8g2.drawVLine(chart_x + 13, 24, 34);
   u8g2.drawVLine(chart_x + 14, 24, 34);
 
-  //异或绘制
   u8g2.setDrawColor(2);
   angle = 20.00 + (float)random(0, 1024) / 100.00;
   u8g2.drawLine(chart_x + 11, 58 - (int)angle_last / 2, chart_x + 12, 58 - (int)angle / 2);
@@ -666,8 +719,6 @@ void chart_ui_show() / {
   chart_x += 2;
   u8g2.drawBox(96, 0, 30, 14);
   u8g2.setDrawColor(1);
-
-
   u8g2.setCursor(96, 12);
   u8g2.print(angle);
 }
@@ -748,34 +799,38 @@ void about_ui_show()  //about界面
 
 /**************************界面处理*******************************/
 
-void logo_proc()  //logo界面处理函数
-{
-  if (key_msg.pressed) {
-    key_msg.pressed = false;
+void logo_proc() {
+  if (g_inputEvent.action != InputAction::None) {
+    g_inputEvent.action = InputAction::None;
     ui_state = S_DISAPPEAR;
     ui_index = M_SELECT;
   }
   logo_ui_show();
 }
 
-void pid_edit_proc(void)  //pid编辑界面处理函数
-{
-  if (key_msg.pressed) {
-    key_msg.pressed = false;
-    switch (key_msg.id) {
-      case 0:
-        if (Kpid[pid_select] > 0) Kpid[pid_select] -= 0.01;
+void pid_edit_proc() {
+  if (g_inputEvent.action != InputAction::None) {
+    switch (g_inputEvent.action) {
+      case InputAction::Up:
+        if (Kpid[pidMenuState.selected] > 0) {
+          Kpid[pidMenuState.selected] -= 0.01;
+        }
         break;
-      case 1:
-        if (Kpid[pid_select] < PID_MAX) Kpid[pid_select] += 0.01;
+      case InputAction::Down:
+        if (Kpid[pidMenuState.selected] < PID_MAX) {
+          Kpid[pidMenuState.selected] += 0.01;
+        }
         break;
-      case 2:
+      case InputAction::Select:
+      case InputAction::Back:
         ui_index = M_PID;
         break;
       default:
         break;
     }
+    g_inputEvent.action = InputAction::None;
   }
+
   pid_ui_show();
   for (uint16_t i = 0; i < buf_len; ++i) {
     buf_ptr[i] = buf_ptr[i] & (i % 2 == 0 ? 0x55 : 0xAA);
@@ -783,210 +838,217 @@ void pid_edit_proc(void)  //pid编辑界面处理函数
   pid_edit_ui_show();
 }
 
-void pid_proc()  //pid界面处理函数
-{
+void pid_proc() {
   pid_ui_show();
-  if (key_msg.pressed) {
-    key_msg.pressed = false;
-    switch (key_msg.id) {
-      case 0:
-        if (pid_select != 0) {
-          pid_select -= 1;
-          pid_line_y_trg -= 15;
-          pid_box_y_trg -= 16;
-          break;
-        } else {
-          break;
-        }
-      case 1:
-        if (pid_select != 3) {
-          pid_select += 1;
-          pid_line_y_trg += 15;
-          pid_box_y_trg += 16;
-        } else {
-          break;
-        }
-        break;
-      case 2:
-        if (pid_select == 3) {
-          ui_index = M_SELECT;
-          ui_state = S_DISAPPEAR;
-          pid_select = 0;
-          pid_line_y = pid_line_y_trg = 1;
-          pid_box_y = pid_box_y_trg = 0;
-          pid_box_width = pid_box_width_trg = u8g2.getStrWidth(pid[pid_select].select) + x * 2;
-        } else {
-          ui_index = M_PID_EDIT;
-        }
-        break;
-      default:
-        break;
-    }
-    pid_box_width_trg = u8g2.getStrWidth(pid[pid_select].select) + x * 2;
+
+  if (g_inputEvent.action == InputAction::None) {
+    return;
   }
+
+  InputAction action = g_inputEvent.action;
+  g_inputEvent.action = InputAction::None;
+
+  switch (action) {
+    case InputAction::Up:
+      if (pidMenuState.selected == 0) {
+        break;
+      }
+      pidMenuState.selected -= 1;
+      pidMenuState.indicatorTarget -= 15;
+      pidMenuState.boxYTarget -= 16;
+      break;
+    case InputAction::Down:
+      if (pidMenuState.selected >= kPidMenuCount - 1) {
+        break;
+      }
+      pidMenuState.selected += 1;
+      pidMenuState.indicatorTarget += 15;
+      pidMenuState.boxYTarget += 16;
+      break;
+    case InputAction::Select:
+      if (kPidMenu[pidMenuState.selected].editable) {
+        ui_index = M_PID_EDIT;
+      } else {
+        ui_state = S_DISAPPEAR;
+        ui_index = M_SELECT;
+        pidMenuState.selected = 0;
+        pidMenuState.indicatorY = pidMenuState.indicatorTarget = 1;
+        pidMenuState.boxY = pidMenuState.boxYTarget = 0;
+        pidMenuState.boxWidth = pidMenuState.boxWidthTarget = u8g2.getStrWidth(kPidMenu[pidMenuState.selected].label) + kMenuTextOffsetX * 2;
+      }
+      break;
+    case InputAction::Back:
+      ui_state = S_DISAPPEAR;
+      ui_index = M_SELECT;
+      pidMenuState.selected = 0;
+      pidMenuState.indicatorY = pidMenuState.indicatorTarget = 1;
+      pidMenuState.boxY = pidMenuState.boxYTarget = 0;
+      pidMenuState.boxWidth = pidMenuState.boxWidthTarget = u8g2.getStrWidth(kPidMenu[pidMenuState.selected].label) + kMenuTextOffsetX * 2;
+      break;
+    default:
+      break;
+  }
+
+  pidMenuState.boxWidthTarget = u8g2.getStrWidth(kPidMenu[pidMenuState.selected].label) + kMenuTextOffsetX * 2;
 }
 
-void select_proc(void)  // 选择界面处理
-{
-  if (key_msg.pressed) {
-    key_msg.pressed = false;
-    switch (key_msg.id) {
-      case 0:  // 按下按钮 0
-        if (ui_select < 1) break;
-        ui_select -= 1;
-        line_y_trg -= single_line_length;
-        if (ui_select < -(y / 16)) {
-          y_trg += 16;
+void select_proc() {
+  if (g_inputEvent.action != InputAction::None) {
+    InputAction action = g_inputEvent.action;
+    g_inputEvent.action = InputAction::None;
+
+    switch (action) {
+      case InputAction::Up:
+        if (mainMenuState.selected < 1) {
+          break;
+        }
+        mainMenuState.selected -= 1;
+        mainMenuState.indicatorTarget -= kMainMenuLineSegment;
+        if (mainMenuState.selected < -(mainMenuState.scroll / 16)) {
+          mainMenuState.scrollTarget += 16;
         } else {
-          box_y_trg -= 16;
+          mainMenuState.boxYTarget -= 16;
         }
         break;
-      case 1:  // 按下按钮 1
-        if ((ui_select + 2) > (sizeof(list) / sizeof(SELECT_LIST))) break;
-        ui_select += 1;
-        line_y_trg += single_line_length;
-        if ((ui_select + 1) > (4 - y / 16)) {
-          y_trg -= 16;
+      case InputAction::Down:
+        if (mainMenuState.selected >= kMainMenuCount - 1) {
+          break;
+        }
+        mainMenuState.selected += 1;
+        mainMenuState.indicatorTarget += kMainMenuLineSegment;
+        if ((mainMenuState.selected + 1) > (kMainMenuVisibleRows - mainMenuState.scroll / 16)) {
+          mainMenuState.scrollTarget -= 16;
         } else {
-          box_y_trg += 16;
+          mainMenuState.boxYTarget += 16;
         }
         break;
-      case 2:  // 按下按钮 2
-        switch (ui_select) {
-          case 0:  // return
-            ui_state = S_DISAPPEAR;
-            ui_index = M_LOGO;
-            break;
-          case 1:  // PID
-            ui_state = S_DISAPPEAR;
-            ui_index = M_PID;
-            break;
-          case 2:  // icon
-            ui_state = S_DISAPPEAR;
-            ui_index = M_ICON;
-            break;
-          case 3:  // chart
-            ui_state = S_DISAPPEAR;
-            ui_index = M_CHART;
-            break;
-          case 4:  // textedit
-            ui_state = S_DISAPPEAR;
-            ui_index = M_TEXT_EDIT;
-            break;
-          case 6:  // about
-            ui_state = S_DISAPPEAR;
-            ui_index = M_ABOUT;
-            break;
-          default:
-            break;
-        }
+      case InputAction::Select: {
+        const MenuItem& item = kMainMenu[mainMenuState.selected];
+        ui_state = S_DISAPPEAR;
+        ui_index = item.targetPage;
         break;
-      case 3:  // 按下返回按钮（BTN3）
+      }
+      case InputAction::Back:
         ui_state = S_DISAPPEAR;
         ui_index = M_SELECT;
         break;
       default:
         break;
     }
-    box_width_trg = u8g2.getStrWidth(list[ui_select].select) + x * 2;
+
+    mainMenuState.boxWidthTarget = u8g2.getStrWidth(kMainMenu[mainMenuState.selected].label) + kMenuTextOffsetX * 2;
   }
+
   select_ui_show();
 }
 
 
-void icon_proc(void)  //icon界面处理
-{
+void icon_proc() {
   icon_ui_show();
-  if (key_msg.pressed) {
-    key_msg.pressed = false;
-    switch (key_msg.id) {
-      case 1:
-        if (icon_select != (icon_num - 1)) {
-          icon_select += 1;
-          app_y_trg += 16;
-          icon_x_trg -= ICON_SPACE;
-        }
-        break;
-      case 0:
-        if (icon_select != 0) {
-          icon_select -= 1;
-          app_y_trg -= 16;
-          icon_x_trg += ICON_SPACE;
-        }
-        break;
-      case 2:
-        ui_state = S_DISAPPEAR;
-        ui_index = M_SELECT;
-        icon_select = 0;
-        icon_x = icon_x_trg = 0;
-        app_y = app_y_trg = 0;
-        break;
-      default:
-        break;
-    }
+
+  if (g_inputEvent.action == InputAction::None) {
+    return;
+  }
+
+  InputAction action = g_inputEvent.action;
+  g_inputEvent.action = InputAction::None;
+
+  switch (action) {
+    case InputAction::Down:
+      if (icon_select < static_cast<int8_t>(kIconCount) - 1) {
+        icon_select += 1;
+        icon_label_offset_trg += 16;
+        icon_x_trg -= ICON_SPACE;
+      }
+      break;
+    case InputAction::Up:
+      if (icon_select > 0) {
+        icon_select -= 1;
+        icon_label_offset_trg -= 16;
+        icon_x_trg += ICON_SPACE;
+      }
+      break;
+    case InputAction::Select:
+    case InputAction::Back:
+      ui_state = S_DISAPPEAR;
+      ui_index = M_SELECT;
+      icon_select = 0;
+      icon_x = icon_x_trg = 0;
+      icon_label_offset = icon_label_offset_trg = 0;
+      break;
+    default:
+      break;
   }
 }
 
-void chart_proc()  //chart界面处理函数
-{
+void chart_proc() {
   chart_ui_show();
-  if (key_msg.pressed) {
-    key_msg.pressed = false;
+  if (g_inputEvent.action != InputAction::None) {
+    g_inputEvent.action = InputAction::None;
     ui_state = S_DISAPPEAR;
     ui_index = M_SELECT;
-    frame_is_drawed = false;  //退出后框架为未画状态
+    frame_is_drawed = false;
     chart_x = 0;
   }
 }
 
 void text_edit_proc() {
   text_edit_ui_show();
-  if (key_msg.pressed) {
-    key_msg.pressed = false;
-    switch (key_msg.id) {
-      case 0:
-        if (edit_flag) {
-          //编辑
-          text_edit(false, edit_index);
+
+  if (g_inputEvent.action == InputAction::None) {
+    return;
+  }
+
+  InputAction action = g_inputEvent.action;
+  g_inputEvent.action = InputAction::None;
+
+  switch (action) {
+    case InputAction::Up:
+      if (edit_flag) {
+        text_edit(false, edit_index);
+      } else {
+        if (edit_index == 0) {
+          edit_index = name_len;
         } else {
-          if (edit_index == 0) {
-            edit_index = name_len;
-          } else {
-            edit_index -= 1;
-          }
+          edit_index -= 1;
         }
-        break;
-      case 1:
-        if (edit_flag) {
-          //编辑
-          text_edit(true, edit_index);
-        } else {
-          if (edit_index == name_len) {
-            edit_index = 0;
-          } else {
-            edit_index += 1;
-          }
-        }
-        break;
-      case 2:
+      }
+      break;
+    case InputAction::Down:
+      if (edit_flag) {
+        text_edit(true, edit_index);
+      } else {
         if (edit_index == name_len) {
-          ui_state = S_DISAPPEAR;
-          ui_index = M_SELECT;
           edit_index = 0;
         } else {
-          edit_flag = !edit_flag;
+          edit_index += 1;
         }
-        break;
-      default:
-        break;
-    }
+      }
+      break;
+    case InputAction::Select:
+      if (edit_index == name_len) {
+        ui_state = S_DISAPPEAR;
+        ui_index = M_SELECT;
+        edit_index = 0;
+        edit_flag = false;
+      } else {
+        edit_flag = !edit_flag;
+      }
+      break;
+    case InputAction::Back:
+      ui_state = S_DISAPPEAR;
+      ui_index = M_SELECT;
+      edit_index = 0;
+      edit_flag = false;
+      break;
+    default:
+      break;
   }
 }
 
-void about_proc()  //about界面处理函数
-{
-  if (key_msg.pressed) {
-    key_msg.pressed = false;
+void about_proc() {
+  if (g_inputEvent.action != InputAction::None) {
+    g_inputEvent.action = InputAction::None;
     ui_state = S_DISAPPEAR;
     ui_index = M_SELECT;
   }
@@ -1054,16 +1116,23 @@ void setup() {
   buf_ptr = u8g2.getBufferPtr();  //拿到buffer首地址
   buf_len = 8 * u8g2.getBufferTileHeight() * u8g2.getBufferTileWidth();
 
-  x = 4;
-  y = y_trg = 0;
-  line_y = line_y_trg = 1;
-  pid_line_y = pid_line_y_trg = 1;
-  ui_select = pid_select = icon_select = 0;
-  icon_x = icon_x_trg = 0;
-  app_y = app_y_trg = 0;
+  mainMenuState.scroll = mainMenuState.scrollTarget = 0;
+  mainMenuState.indicatorY = mainMenuState.indicatorTarget = 1;
+  mainMenuState.boxY = mainMenuState.boxYTarget = 0;
+  mainMenuState.selected = 0;
+  mainMenuState.boxWidth = mainMenuState.boxWidthTarget = u8g2.getStrWidth(kMainMenu[0].label) + kMenuTextOffsetX * 2;
 
-  box_width = box_width_trg = u8g2.getStrWidth(list[ui_select].select) + x * 2;          //两边各多2
-  pid_box_width = pid_box_width_trg = u8g2.getStrWidth(pid[pid_select].select) + x * 2;  //两边各多2
+  pidMenuState.scroll = pidMenuState.scrollTarget = 0;
+  pidMenuState.indicatorY = pidMenuState.indicatorTarget = 1;
+  pidMenuState.boxY = pidMenuState.boxYTarget = 0;
+  pidMenuState.selected = 0;
+  pidMenuState.boxWidth = pidMenuState.boxWidthTarget = u8g2.getStrWidth(kPidMenu[0].label) + kMenuTextOffsetX * 2;
+
+  icon_select = 0;
+  icon_x = icon_x_trg = 0;
+  icon_label_offset = icon_label_offset_trg = 0;
+
+  g_lastMenuDirection = InputAction::None;
 
   ui_index = M_LOGO;
   //ui_index=M_TEXT_EDIT;
@@ -1071,6 +1140,9 @@ void setup() {
 }
 
 void loop() {
-  key_scan();
+  g_inputEvent = pollInput();
+  if (g_inputEvent.action == InputAction::Up || g_inputEvent.action == InputAction::Down) {
+    g_lastMenuDirection = g_inputEvent.action;
+  }
   ui_proc();
 }
