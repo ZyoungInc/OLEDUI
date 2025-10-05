@@ -4,7 +4,7 @@
 // == Section: Display & Input Configuration =================================
 // ============================================================================
 
-#define SPEED 2       // 基础移动速度，必须是 16 的因数
+#define SPEED 1       // 基础移动速度，必须是 16 的因数
 #define ICON_SPEED 8  // 图标切换速度
 #define ICON_SPACE 48 // 图标间隔，SPEED 的倍数
 
@@ -321,9 +321,12 @@ struct TransitionState {
 
 TransitionState transition;
 
-constexpr uint8_t LOGO_SLIDE_SPEED = 8;
-constexpr uint8_t MENU_SLIDE_SPEED = 12;
+constexpr uint8_t TRANSITION_STEP = SPEED == 0 ? 16 : static_cast<uint8_t>(16 / SPEED);
+constexpr uint8_t LOGO_SLIDE_SPEED = static_cast<uint8_t>(TRANSITION_STEP);
+constexpr uint8_t MENU_SLIDE_SPEED = static_cast<uint8_t>(TRANSITION_STEP + TRANSITION_STEP / 2);
 constexpr uint8_t MENU_STEP_DELAY = 3;
+constexpr uint8_t PAGE_SLIDE_SPEED = static_cast<uint8_t>(TRANSITION_STEP);
+constexpr uint8_t PAGE_STEP_DELAY = 4;
 
 //const char* text="This is a text Hello world ! follow up one two three four may jun july";
 
@@ -716,7 +719,7 @@ void icon_ui_show() {
 
 void chart_ui_show() {
   // 图表界面：绘制曲线与实时数值
-  if (!frame_is_drawed) {
+  if (!frame_is_drawed || ui_state != S_NONE) {
     u8g2.clearBuffer();
     chart_draw_frame();
     angle_last = 20.00 + static_cast<float>(random(0, 1024)) / 100.0f;
@@ -763,37 +766,65 @@ void chart_draw_frame() {
   u8g2.setDrawColor(1);
 }
 
-void text_edit_ui_show() {
-  u8g2.drawRFrame(4, 6, 120, 52, 8);
-  u8g2.drawStr((128 - u8g2.getStrWidth("--Text Editor--")) / 2, 20, "--Text Editor--");
-  u8g2.drawStr(10, 38, name);
-  u8g2.drawStr(80, 50, "-Return");
+void draw_text_edit_ui(int16_t headerOffset, int16_t nameOffset, int16_t footerOffset) {
+  auto isVisible = [](int16_t x, int16_t width) {
+    return !(x >= 128 || x + static_cast<int16_t>(width) <= 0);
+  };
 
-  uint8_t box_x = 9;
+  u8g2.setDrawColor(1);
+  int16_t frameX = 4 + headerOffset;
+  if (isVisible(frameX, 120)) {
+    u8g2.drawRFrame(frameX, 6, 120, 52, 8);
+  }
 
-  //绘制光标
+  const char* title = "--Text Editor--";
+  int16_t titleX = static_cast<int16_t>((128 - u8g2.getStrWidth(title)) / 2) + headerOffset;
+  if (isVisible(titleX, u8g2.getStrWidth(title))) {
+    u8g2.drawStr(titleX, 20, title);
+  }
+
+  int16_t nameX = 10 + nameOffset;
+  if (isVisible(nameX, u8g2.getStrWidth(name))) {
+    u8g2.drawStr(nameX, 38, name);
+  }
+
+  const char* exitLabel = "-Return";
+  int16_t exitX = 80 + footerOffset;
+  if (isVisible(exitX, u8g2.getStrWidth(exitLabel))) {
+    u8g2.drawStr(exitX, 50, exitLabel);
+  }
+
   if (edit_index < name_len) {
     if (blink_flag < BLINK_SPEED / 2) {
+      int16_t boxX = 9 + nameOffset;
       for (uint8_t i = 0; i < edit_index; ++i) {
         char temp[2] = { name[i], '\0' };
-        box_x += u8g2.getStrWidth(temp);
+        boxX += u8g2.getStrWidth(temp);
         if (name[i] != ' ') {
-          box_x++;
+          boxX++;
         }
       }
       char temp[2] = { name[edit_index], '\0' };
-      u8g2.setDrawColor(2);
-      u8g2.drawBox(box_x, 26, u8g2.getStrWidth(temp) + 2, 16);
-      u8g2.setDrawColor(1);
+      int16_t width = u8g2.getStrWidth(temp) + 2;
+      if (isVisible(boxX, width)) {
+        u8g2.setDrawColor(2);
+        u8g2.drawBox(boxX, 26, static_cast<uint8_t>(width), 16);
+        u8g2.setDrawColor(1);
+      }
     }
   } else {
-    u8g2.setDrawColor(2);
-    u8g2.drawRBox(78, 38, u8g2.getStrWidth("-Return") + 4, 16, 1);
-    u8g2.setDrawColor(1);
+    int16_t width = u8g2.getStrWidth(exitLabel) + 4;
+    int16_t boxX = 78 + footerOffset;
+    if (isVisible(boxX, width)) {
+      u8g2.setDrawColor(2);
+      u8g2.drawRBox(boxX, 38, static_cast<uint8_t>(width), 16, 1);
+      u8g2.setDrawColor(1);
+    }
   }
+}
 
-  if (edit_flag)  //处于编辑状态
-  {
+void update_text_edit_blink() {
+  if (edit_flag) {
     if (blink_flag < BLINK_SPEED) {
       blink_flag += 1;
     } else {
@@ -804,12 +835,29 @@ void text_edit_ui_show() {
   }
 }
 
+void text_edit_ui_show() {
+  draw_text_edit_ui(0, 0, 0);
+  update_text_edit_blink();
+}
+
 void about_ui_show() {
   // 关于界面：展示基础信息
   u8g2.drawStr(2, 12, "CocoFactory Sleep Porj");
   u8g2.drawStr(2, 28, "    Rortable Radar Kit");
   u8g2.drawStr(2, 44, "FreeRAM : 517KB");
   u8g2.drawStr(2, 60, "Sensor : R60A");
+}
+
+int16_t page_transition_offset(uint8_t index, bool entering, uint8_t stepDelay, uint8_t speed) {
+  uint16_t delay = static_cast<uint16_t>(index) * stepDelay;
+  if (transition.step <= delay) {
+    return entering ? 128 : 0;
+  }
+
+  uint16_t progress = static_cast<uint16_t>(transition.step - delay) * speed;
+  if (progress > 128) progress = 128;
+
+  return entering ? static_cast<int16_t>(128 - progress) : static_cast<int16_t>(progress);
 }
 
 int16_t menu_transition_offset(uint8_t index, bool entering) {
@@ -878,6 +926,48 @@ bool animate_select_transition(bool entering) {
   return completed;
 }
 
+bool animate_text_transition(bool entering) {
+  bool completed = true;
+
+  int16_t headerOffset = page_transition_offset(0, entering, PAGE_STEP_DELAY, PAGE_SLIDE_SPEED);
+  int16_t nameOffset = page_transition_offset(1, entering, PAGE_STEP_DELAY, PAGE_SLIDE_SPEED);
+  int16_t footerOffset = page_transition_offset(2, entering, PAGE_STEP_DELAY, PAGE_SLIDE_SPEED);
+
+  if ((entering && headerOffset > 0) || (!entering && headerOffset < 128)) completed = false;
+  if ((entering && nameOffset > 0) || (!entering && nameOffset < 128)) completed = false;
+  if ((entering && footerOffset > 0) || (!entering && footerOffset < 128)) completed = false;
+
+  draw_text_edit_ui(headerOffset, nameOffset, footerOffset);
+  update_text_edit_blink();
+
+  return completed;
+}
+
+bool animate_about_transition(bool entering) {
+  static const char* const lines[] = {
+    "CocoFactory Sleep Porj",
+    "    Rortable Radar Kit",
+    "FreeRAM : 517KB",
+    "Sensor : R60A",
+  };
+
+  bool completed = true;
+  u8g2.setDrawColor(1);
+  for (uint8_t i = 0; i < 4; ++i) {
+    int16_t offset = page_transition_offset(i, entering, PAGE_STEP_DELAY, PAGE_SLIDE_SPEED);
+    if ((entering && offset > 0) || (!entering && offset < 128)) {
+      completed = false;
+    }
+    int16_t x = 2 + offset;
+    int16_t width = u8g2.getStrWidth(lines[i]);
+    if (!(x >= 128 || x + width <= 0)) {
+      u8g2.drawStr(x, static_cast<uint8_t>(12 + i * 16), lines[i]);
+    }
+  }
+
+  return completed;
+}
+
 void render_static_page(uint8_t page) {
   switch (page) {
     case M_LOGO:
@@ -919,17 +1009,63 @@ bool animate_transition_page(uint8_t page, bool entering) {
       return animate_logo_transition(entering);
     case M_SELECT:
       return animate_select_transition(entering);
+    case M_TEXT_EDIT:
+      return animate_text_transition(entering);
+    case M_ABOUT:
+      return animate_about_transition(entering);
     default:
       render_static_page(page);
       return true;
   }
 }
 
+void settle_page_state(uint8_t page) {
+  switch (page) {
+    case M_SELECT:
+      y = y_trg;
+      box_y = box_y_trg;
+      box_width = box_width_trg;
+      line_y = line_y_trg;
+      mainMenu.progress.value = mainMenu.progress.target;
+      break;
+    case M_PID:
+      pid_box_y = pid_box_y_trg;
+      pid_box_width = pid_box_width_trg;
+      pid_line_y = pid_line_y_trg;
+      pidMenu.progress.value = pidMenu.progress.target;
+      break;
+    case M_ICON:
+      icon_x = icon_x_trg;
+      app_y = app_y_trg;
+      break;
+    default:
+      break;
+  }
+}
+
+void prepare_target_state(uint8_t page) {
+  switch (page) {
+    case M_CHART:
+      frame_is_drawed = false;
+      chart_x = 0;
+      break;
+    case M_TEXT_EDIT:
+      blink_flag = 0;
+      break;
+    default:
+      break;
+  }
+}
+
 void start_transition(uint8_t target) {
   if (ui_state == S_DISAPPEAR || ui_state == S_APPEAR) {
+    prepare_target_state(target);
     transition.to = target;
     return;
   }
+
+  settle_page_state(ui_index);
+  prepare_target_state(target);
 
   transition.from = ui_index;
   transition.to = target;
