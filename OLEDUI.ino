@@ -1,15 +1,23 @@
 #include <U8g2lib.h>
 
-#define SPEED 2  //16的因数
-#define ICON_SPEED 8
-#define ICON_SPACE 48  //图标间隔，speed倍数
+// ============================================================================
+// == Section: Display & Input Configuration =================================
+// ============================================================================
 
-#define BTN3 D3  //back*
-#define BTN0 8   //up
-#define BTN1 9   //down
-#define BTN2 10  //ok#
+#define SPEED 2       // 基础移动速度，必须是 16 的因数
+#define ICON_SPEED 8  // 图标切换速度
+#define ICON_SPACE 48 // 图标间隔，SPEED 的倍数
+
+#define BTN3 D3  // Back
+#define BTN0 8   // Up
+#define BTN1 9   // Down
+#define BTN2 10  // OK
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* clock=*/D5, /* data=*/D4);
+
+// ============================================================================
+// == Section: Display Assets =================================================
+// ============================================================================
 
 PROGMEM const uint8_t icon_pic[][200]{
   {
@@ -187,24 +195,22 @@ PROGMEM const uint8_t LOGO[] = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const float PID_MAX = 10.00;  //PID最大允许值
-//PID变量
-float Kpid[3] = { 9.97, 0.2, 0.01 };  //Kp,Ki,Kd
-// float Kp=8.96;
-// float Ki=0.2;
-// float Kd=0.01;
+// ============================================================================
+// == Section: UI State & Animation Data =====================================
+// ============================================================================
 
+const float PID_MAX = 10.00;  // PID 最大允许值
+float Kpid[3] = { 9.97f, 0.2f, 0.01f };  // Kp, Ki, Kd
 
 uint8_t disappear_step = 1;
 
-float angle, angle_last;
-//实时坐标
-uint8_t chart_x;
-bool frame_is_drawed = false;
+float angle = 0.0f;
+float angle_last = 0.0f;
+uint8_t chart_x = 0;          // 实时坐标
+bool frame_is_drawed = false;  // chart 框架是否已经绘制
 
-//指向buf首地址的指针
-uint8_t* buf_ptr;
-uint16_t buf_len;
+uint8_t* buf_ptr = nullptr;  // 指向缓冲区首地址的指针
+uint16_t buf_len = 0;
 
 struct ProgressState {
   uint8_t value = 0;
@@ -310,21 +316,24 @@ enum  //ui_state
 
 //const char* text="This is a text Hello world ! follow up one two three four may jun july";
 
-//菜单结构体
+// ============================================================================
+// == Section: Menu Definitions ==============================================
+// ============================================================================
+
 struct MenuItem {
   const char* label;
 };
 
-MenuItem pid[] = {
+constexpr MenuItem pid[] = {
   { "-Proportion" },
   { "-Integral" },
   { "-Derivative" },
   { "Return" },
 };
 
-uint8_t pid_num = sizeof(pid) / sizeof(MenuItem);  //PID选项数量
+constexpr uint8_t pid_num = sizeof(pid) / sizeof(MenuItem);  //PID选项数量
 
-MenuItem list[] = {
+constexpr MenuItem list[] = {
   { "MainUI" },
   { "+PID Editor" },
   { "-Icon Test" },
@@ -334,11 +343,11 @@ MenuItem list[] = {
   { "{ About }" },
 };
 
-uint8_t list_num = sizeof(list) / sizeof(MenuItem);  //选择界面数量
-uint8_t single_line_length = 63 / list_num;
-uint8_t total_line_length = single_line_length * list_num + 1;
+constexpr uint8_t list_num = sizeof(list) / sizeof(MenuItem);  //选择界面数量
+constexpr uint8_t single_line_length = 63 / list_num;
+constexpr uint8_t total_line_length = single_line_length * list_num + 1;
 
-MenuItem icon[] = {
+constexpr MenuItem icon[] = {
   { "Likes" },
   { "Collection" },
   { "Slot" },
@@ -351,7 +360,11 @@ char name[] = "Hello World ";
 const uint8_t name_len = 12;  //0-11for name  12 for return
 const uint8_t BLINK_SPEED = 16;  //2的倍数
 
-uint8_t icon_num = sizeof(icon) / sizeof(MenuItem);
+constexpr uint8_t icon_num = sizeof(icon) / sizeof(MenuItem);
+
+// ============================================================================
+// == Section: Input Handling =================================================
+// ============================================================================
 
 // Input 命名空间封装了按钮扫描逻辑，后续可以在这里接入编码器等其他输入设备
 namespace Input {
@@ -454,7 +467,10 @@ void key_scan() {
 }
 
 
-//移动函数
+// ============================================================================
+// == Section: Animation Helpers ==============================================
+// ============================================================================
+
 bool move(int16_t* a, int16_t* a_trg) {
   if (*a < *a_trg) {
     *a += SPEED;
@@ -506,9 +522,10 @@ bool move_width(uint8_t& value, uint8_t& target, const MenuItem* items, uint8_t 
     return u8g2.getStrWidth(items[index].label);
   };
 
-  uint8_t step = 16 / SPEED;
-  uint8_t len = abs(widthOf(select) - widthOf(neighborIndex));
-  uint8_t width_speed = step == 0 ? 0 : ((len % step) == 0 ? (len / step) : (len / step + 1));
+  const uint8_t step = SPEED == 0 ? 0 : static_cast<uint8_t>(16 / SPEED);
+  const int16_t widthDiff = widthOf(select) - widthOf(neighborIndex);
+  const uint8_t len = static_cast<uint8_t>(widthDiff >= 0 ? widthDiff : -widthDiff);
+  const uint8_t width_speed = step == 0 ? len : static_cast<uint8_t>((len + step - 1) / step);
 
   if (value < target) {
     value += width_speed;
@@ -529,8 +546,9 @@ bool move_bar(ProgressState& progress) {
     return true;
   }
 
-  uint8_t step = 16 / SPEED;
-  uint8_t width_speed = step == 0 ? 0 : ((progress.segment % step) == 0 ? (progress.segment / step) : (progress.segment / step + 1));
+  const uint8_t step = SPEED == 0 ? 0 : static_cast<uint8_t>(16 / SPEED);
+  const uint8_t width_speed = step == 0 ? progress.segment
+                                       : static_cast<uint8_t>((progress.segment + step - 1) / step);
 
   if (progress.value < progress.target) {
     progress.value += width_speed;
@@ -622,111 +640,108 @@ void disappear() {
 
 
 
-/**************************界面显示*******************************/
+// ============================================================================
+// == Section: UI Rendering ===================================================
+// ============================================================================
 
-void logo_ui_show()  //显示logo{
+void logo_ui_show() {
+  // 显示启动 Logo
   u8g2.drawXBMP(0, 0, 128, 64, LOGO);
-
-// for(uint16_t i=0;i<buf_len;++i)
-// {
-//   if(i%4==0||i%4==1)
-//   {
-//   buf_ptr[i]=buf_ptr[i] & 0x33;
-//   }
-//   else
-//   {
-//   buf_ptr[i]=buf_ptr[i] & 0xCC;
-//   }
-// }
 }
 
-void select_ui_show()  //选择界面{
+void select_ui_show() {
+  // 选择界面：动态移动光标和宽度，并绘制菜单和进度条
   move_bar(mainMenu.progress);
-move(&y, &y_trg);
-move(&box_y, &box_y_trg);
-move_width(box_width, box_width_trg, list, list_num, ui_select, key_msg.id);
-u8g2.drawVLine(126, 0, total_line_length);
-u8g2.drawPixel(125, 0);
-u8g2.drawPixel(127, 0);
-for (uint8_t i = 0; i < list_num; ++i) {
-  u8g2.drawStr(x, 16 * i + y + 12, list[i].label);  // 第一段输出位置
-  u8g2.drawPixel(125, single_line_length * (i + 1));
-  u8g2.drawPixel(127, single_line_length * (i + 1));
-}
-u8g2.drawVLine(125, line_y, single_line_length - 1);
-u8g2.drawVLine(127, line_y, single_line_length - 1);
-u8g2.setDrawColor(2);
-u8g2.drawRBox(0, box_y, box_width, 16, 1);
-u8g2.setDrawColor(1);
+  move(&y, &y_trg);
+  move(&box_y, &box_y_trg);
+  move_width(box_width, box_width_trg, list, list_num, ui_select, key_msg.id);
+
+  u8g2.drawVLine(126, 0, total_line_length);
+  u8g2.drawPixel(125, 0);
+  u8g2.drawPixel(127, 0);
+  for (uint8_t i = 0; i < list_num; ++i) {
+    u8g2.drawStr(x, 16 * i + y + 12, list[i].label);
+    u8g2.drawPixel(125, single_line_length * (i + 1));
+    u8g2.drawPixel(127, single_line_length * (i + 1));
+  }
+
+  u8g2.drawVLine(125, line_y, single_line_length - 1);
+  u8g2.drawVLine(127, line_y, single_line_length - 1);
+  u8g2.setDrawColor(2);
+  u8g2.drawRBox(0, box_y, box_width, 16, 1);
+  u8g2.setDrawColor(1);
 }
 
-void pid_ui_show()  //PID界面{
+void pid_ui_show() {
+  // PID 界面：更新光标和选中项的宽度，并绘制 PID 菜单
   move_bar(pidMenu.progress);
-move(&pid_box_y, &pid_box_y_trg);
-move_width(pid_box_width, pid_box_width_trg, pid, pid_num, pid_select, key_msg.id);
-u8g2.drawVLine(126, 0, 61);
-u8g2.drawPixel(125, 0);
-u8g2.drawPixel(127, 0);
-for (uint8_t i = 0; i < pid_num; ++i) {
-  u8g2.drawStr(x, 16 * i + 12, pid[i].label);  // 第一段输出位置
-  u8g2.drawPixel(125, 15 * (i + 1));
-  u8g2.drawPixel(127, 15 * (i + 1));
+  move(&pid_box_y, &pid_box_y_trg);
+  move_width(pid_box_width, pid_box_width_trg, pid, pid_num, pid_select, key_msg.id);
+
+  u8g2.drawVLine(126, 0, 61);
+  u8g2.drawPixel(125, 0);
+  u8g2.drawPixel(127, 0);
+  for (uint8_t i = 0; i < pid_num; ++i) {
+    u8g2.drawStr(x, 16 * i + 12, pid[i].label);
+    u8g2.drawPixel(125, 15 * (i + 1));
+    u8g2.drawPixel(127, 15 * (i + 1));
+  }
+
+  u8g2.setDrawColor(2);
+  u8g2.drawRBox(0, pid_box_y, pid_box_width, 16, 1);
+  u8g2.setDrawColor(1);
+  u8g2.drawVLine(125, pid_line_y, 14);
+  u8g2.drawVLine(127, pid_line_y, 14);
 }
 
-u8g2.setDrawColor(2);
-u8g2.drawRBox(0, pid_box_y, pid_box_width, 16, 1);
-u8g2.setDrawColor(1);
-u8g2.drawVLine(125, pid_line_y, 14);
-u8g2.drawVLine(127, pid_line_y, 14);
-}
-
-void pid_edit_ui_show()  //显示PID编辑{
+void pid_edit_ui_show() {
+  // PID 编辑界面：绘制滑块与当前参数说明
   u8g2.drawBox(16, 16, 96, 31);
-u8g2.setDrawColor(2);
-u8g2.drawBox(17, 17, 94, 29);
-u8g2.setDrawColor(1);
+  u8g2.setDrawColor(2);
+  u8g2.drawBox(17, 17, 94, 29);
+  u8g2.setDrawColor(1);
 
-//u8g2.drawBox(17,17,(int)(Kpid[pid_select]/PID_MAX)),30);
-u8g2.drawFrame(18, 36, 60, 8);
-u8g2.drawBox(20, 38, (uint8_t)(Kpid[pid_select] / PID_MAX * 56), 4);
+  u8g2.drawFrame(18, 36, 60, 8);
+  u8g2.drawBox(20, 38, static_cast<uint8_t>(Kpid[pid_select] / PID_MAX * 56), 4);
 
-u8g2.setCursor(22, 30);
-switch (pid_select) {
-  case 0:
-    u8g2.print("Editing Kp");
-    break;
-  case 1:
-    u8g2.print("Editing Ki");
-    break;
-  case 2:
-    u8g2.print("Editing Kd");
-    break;
-  default:
-    break;
+  u8g2.setCursor(22, 30);
+  switch (pid_select) {
+    case 0:
+      u8g2.print("Editing Kp");
+      break;
+    case 1:
+      u8g2.print("Editing Ki");
+      break;
+    case 2:
+      u8g2.print("Editing Kd");
+      break;
+    default:
+      break;
+  }
+
+  u8g2.setCursor(81, 44);
+  u8g2.print(Kpid[pid_select]);
 }
 
-u8g2.setCursor(81, 44);
-u8g2.print(Kpid[pid_select]);
-}
-
-void icon_ui_show(void)  //显示icon{
-
+void icon_ui_show() {
+  // 图标界面：滚动图标与对应标题
   move_icon(&icon_x, &icon_x_trg);
-move(&app_y, &app_y_trg);
+  move(&app_y, &app_y_trg);
 
-for (uint8_t i = 0; i < icon_num; ++i) {
-  u8g2.drawXBMP(46 + icon_x + i * ICON_SPACE, 6, 36, icon_width[i], icon_pic[i]);
-  u8g2.setClipWindow(0, 48, 128, 64);
-  u8g2.drawStr((128 - u8g2.getStrWidth(icon[i].label)) / 2, 62 - app_y + i * 16, icon[i].label);
-  u8g2.setMaxClipWindow();
-}
+  for (uint8_t i = 0; i < icon_num; ++i) {
+    u8g2.drawXBMP(46 + icon_x + i * ICON_SPACE, 6, 36, icon_width[i], icon_pic[i]);
+    u8g2.setClipWindow(0, 48, 128, 64);
+    u8g2.drawStr((128 - u8g2.getStrWidth(icon[i].label)) / 2, 62 - app_y + i * 16, icon[i].label);
+    u8g2.setMaxClipWindow();
+  }
 }
 
-void chart_ui_show() / {
-  / chart界面 if (!frame_is_drawed) {  //框架只画一遍
+void chart_ui_show() {
+  // 图表界面：绘制曲线与实时数值
+  if (!frame_is_drawed) {
     u8g2.clearBuffer();
     chart_draw_frame();
-    angle_last = 20.00 + (float)random(0, 1024) / 100.00;
+    angle_last = 20.00 + static_cast<float>(random(0, 1024)) / 100.0f;
     frame_is_drawed = true;
   }
 
@@ -735,37 +750,31 @@ void chart_ui_show() / {
   u8g2.drawVLine(chart_x + 10, 59, 3);
   if (chart_x == 100) chart_x = 0;
 
-  //u8g2.drawBox(chart_x+11,24,8,32);
-
   u8g2.drawVLine(chart_x + 11, 24, 34);
   u8g2.drawVLine(chart_x + 12, 24, 34);
   u8g2.drawVLine(chart_x + 13, 24, 34);
   u8g2.drawVLine(chart_x + 14, 24, 34);
 
-  //异或绘制
   u8g2.setDrawColor(2);
-  angle = 20.00 + (float)random(0, 1024) / 100.00;
-  u8g2.drawLine(chart_x + 11, 58 - (int)angle_last / 2, chart_x + 12, 58 - (int)angle / 2);
+  angle = 20.00 + static_cast<float>(random(0, 1024)) / 100.0f;
+  u8g2.drawLine(chart_x + 11, 58 - static_cast<int>(angle_last) / 2, chart_x + 12, 58 - static_cast<int>(angle) / 2);
   u8g2.drawVLine(chart_x + 12, 59, 3);
   angle_last = angle;
   chart_x += 2;
   u8g2.drawBox(96, 0, 30, 14);
   u8g2.setDrawColor(1);
 
-
   u8g2.setCursor(96, 12);
   u8g2.print(angle);
 }
 
-void chart_draw_frame()  //chart界面
-{
-
+void chart_draw_frame() {
+  // 图表界面：绘制静态框架
   u8g2.drawStr(4, 12, "Real time angle :");
   u8g2.drawRBox(4, 18, 120, 46, 8);
   u8g2.setDrawColor(2);
   u8g2.drawHLine(10, 58, 108);
   u8g2.drawVLine(10, 24, 34);
-  //箭头
   u8g2.drawPixel(7, 27);
   u8g2.drawPixel(8, 26);
   u8g2.drawPixel(9, 25);
@@ -817,24 +826,20 @@ void text_edit_ui_show() {
   }
 }
 
-void about_ui_show()  //about界面
-{
-
+void about_ui_show() {
+  // 关于界面：展示基础信息
   u8g2.drawStr(2, 12, "CocoFactory Sleep Porj");
   u8g2.drawStr(2, 28, "    Rortable Radar Kit");
   u8g2.drawStr(2, 44, "FreeRAM : 517KB");
   u8g2.drawStr(2, 60, "Sensor : R60A");
-
-  // u8g2.drawStr(2,12,"MCU : MEGA2560");
-  // u8g2.drawStr(2,28,"FLASH : 256KB");
-  // u8g2.drawStr(2,44,"SRAM : 8KB");
-  // u8g2.drawStr(2,60,"EEPROM : 4KB");
 }
 
-/**************************界面处理*******************************/
+// ============================================================================
+// == Section: UI State Machines ==============================================
+// ============================================================================
 
-void logo_proc()  //logo界面处理函数
-{
+void logo_proc() {
+  // Logo 界面处理逻辑
   if (key_msg.pressed) {
     key_msg.pressed = false;
     ui_state = S_DISAPPEAR;
@@ -843,8 +848,8 @@ void logo_proc()  //logo界面处理函数
   logo_ui_show();
 }
 
-void pid_edit_proc(void)  //pid编辑界面处理函数
-{
+void pid_edit_proc(void) {
+  // PID 编辑界面处理逻辑
   if (key_msg.pressed) {
     key_msg.pressed = false;
     switch (key_msg.id) {
@@ -868,8 +873,8 @@ void pid_edit_proc(void)  //pid编辑界面处理函数
   pid_edit_ui_show();
 }
 
-void pid_proc()  //pid界面处理函数
-{
+void pid_proc() {
+  // PID 菜单界面处理逻辑
   pid_ui_show();
   if (key_msg.pressed) {
     key_msg.pressed = false;
@@ -911,8 +916,8 @@ void pid_proc()  //pid界面处理函数
   }
 }
 
-void select_proc(void)  // 选择界面处理
-{
+void select_proc(void) {
+  // 主选择界面处理逻辑
   if (key_msg.pressed) {
     key_msg.pressed = false;
     switch (key_msg.id) {
@@ -979,8 +984,8 @@ void select_proc(void)  // 选择界面处理
 }
 
 
-void icon_proc(void)  //icon界面处理
-{
+void icon_proc(void) {
+  // 图标界面处理逻辑
   icon_ui_show();
   if (key_msg.pressed) {
     key_msg.pressed = false;
@@ -1012,8 +1017,8 @@ void icon_proc(void)  //icon界面处理
   }
 }
 
-void chart_proc()  //chart界面处理函数
-{
+void chart_proc() {
+  // 图表界面处理逻辑
   chart_ui_show();
   if (key_msg.pressed) {
     key_msg.pressed = false;
@@ -1025,6 +1030,7 @@ void chart_proc()  //chart界面处理函数
 }
 
 void text_edit_proc() {
+  // 文字编辑界面处理逻辑
   text_edit_ui_show();
   if (key_msg.pressed) {
     key_msg.pressed = false;
@@ -1068,8 +1074,8 @@ void text_edit_proc() {
   }
 }
 
-void about_proc()  //about界面处理函数
-{
+void about_proc() {
+  // 关于界面处理逻辑
   if (key_msg.pressed) {
     key_msg.pressed = false;
     ui_state = S_DISAPPEAR;
@@ -1077,10 +1083,12 @@ void about_proc()  //about界面处理函数
   }
   about_ui_show();
 }
-/********************************总的UI显示************************************/
+// ============================================================================
+// == Section: UI Dispatch & Arduino Hooks ===================================
+// ============================================================================
 
-void ui_proc()  //总的UI进程
-{
+void ui_proc() {
+  // 根据当前状态调度对应界面
   switch (ui_state) {
     case S_NONE:
       if (ui_index != M_CHART) u8g2.clearBuffer();
@@ -1124,19 +1132,20 @@ void ui_proc()  //总的UI进程
 
 
 void setup() {
+  // 初始化串口与按键 IO
   Serial.begin(9600);
-  //Wire.begin(21,22,400000);
   pinMode(BTN0, INPUT_PULLUP);
   pinMode(BTN1, INPUT_PULLUP);
   pinMode(BTN2, INPUT_PULLUP);
-  pinMode(BTN3, INPUT_PULLUP);  // 设置返回按钮
+  pinMode(BTN3, INPUT_PULLUP);
   key_init();
+
+  // 初始化显示屏
   u8g2.setBusClock(2000000);
   u8g2.begin();
   u8g2.setFont(u8g2_font_wqy12_t_chinese1);
-  //u8g2.setContrast(10);
 
-  buf_ptr = u8g2.getBufferPtr();  //拿到buffer首地址
+  buf_ptr = u8g2.getBufferPtr();
   buf_len = 8 * u8g2.getBufferTileHeight() * u8g2.getBufferTileWidth();
 
   mainMenu.progress.segment = single_line_length;
@@ -1154,11 +1163,11 @@ void setup() {
   pid_box_width = pid_box_width_trg = calculate_menu_width(pid, pid_select, x);  //两边各多2
 
   ui_index = M_LOGO;
-  //ui_index=M_TEXT_EDIT;
   ui_state = S_NONE;
 }
 
 void loop() {
+  // 刷新输入并绘制界面
   key_scan();
   ui_proc();
 }
