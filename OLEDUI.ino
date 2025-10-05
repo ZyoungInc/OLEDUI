@@ -315,16 +315,16 @@ struct MenuItem {
   const char* label;
 };
 
-MenuItem pid[] = {
+constexpr MenuItem pid[] = {
   { "-Proportion" },
   { "-Integral" },
   { "-Derivative" },
   { "Return" },
 };
 
-uint8_t pid_num = sizeof(pid) / sizeof(MenuItem);  //PID选项数量
+constexpr uint8_t pid_num = sizeof(pid) / sizeof(MenuItem);  //PID选项数量
 
-MenuItem list[] = {
+constexpr MenuItem list[] = {
   { "MainUI" },
   { "+PID Editor" },
   { "-Icon Test" },
@@ -334,11 +334,11 @@ MenuItem list[] = {
   { "{ About }" },
 };
 
-uint8_t list_num = sizeof(list) / sizeof(MenuItem);  //选择界面数量
+constexpr uint8_t list_num = sizeof(list) / sizeof(MenuItem);  //选择界面数量
 uint8_t single_line_length = 63 / list_num;
 uint8_t total_line_length = single_line_length * list_num + 1;
 
-MenuItem icon[] = {
+constexpr MenuItem icon[] = {
   { "Likes" },
   { "Collection" },
   { "Slot" },
@@ -351,7 +351,7 @@ char name[] = "Hello World ";
 const uint8_t name_len = 12;  //0-11for name  12 for return
 const uint8_t BLINK_SPEED = 16;  //2的倍数
 
-uint8_t icon_num = sizeof(icon) / sizeof(MenuItem);
+constexpr uint8_t icon_num = sizeof(icon) / sizeof(MenuItem);
 
 // Input 命名空间封装了按钮扫描逻辑，后续可以在这里接入编码器等其他输入设备
 namespace Input {
@@ -506,9 +506,10 @@ bool move_width(uint8_t& value, uint8_t& target, const MenuItem* items, uint8_t 
     return u8g2.getStrWidth(items[index].label);
   };
 
-  uint8_t step = 16 / SPEED;
-  uint8_t len = abs(widthOf(select) - widthOf(neighborIndex));
-  uint8_t width_speed = step == 0 ? 0 : ((len % step) == 0 ? (len / step) : (len / step + 1));
+  const uint8_t step = SPEED == 0 ? 0 : static_cast<uint8_t>(16 / SPEED);
+  const int16_t widthDiff = widthOf(select) - widthOf(neighborIndex);
+  const uint8_t len = static_cast<uint8_t>(widthDiff >= 0 ? widthDiff : -widthDiff);
+  const uint8_t width_speed = step == 0 ? len : static_cast<uint8_t>((len + step - 1) / step);
 
   if (value < target) {
     value += width_speed;
