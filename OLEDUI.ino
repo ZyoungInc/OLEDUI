@@ -202,8 +202,6 @@ PROGMEM const uint8_t LOGO[] = {
 const float PID_MAX = 10.00;  // PID 最大允许值
 float Kpid[3] = { 9.97f, 0.2f, 0.01f };  // Kp, Ki, Kd
 
-uint8_t disappear_step = 1;
-
 float angle = 0.0f;
 float angle_last = 0.0f;
 uint8_t chart_x = 0;          // 实时坐标
@@ -308,11 +306,24 @@ enum  //ui_state
 {
   S_NONE,
   S_DISAPPEAR,
+  S_APPEAR,
   S_SWITCH,
   S_MENU_TO_MENU,
   S_MENU_TO_PIC,
   S_PIC_TO_MENU,
 };
+
+struct TransitionState {
+  uint8_t from = M_LOGO;
+  uint8_t to = M_LOGO;
+  uint8_t step = 0;
+};
+
+TransitionState transition;
+
+constexpr uint8_t LOGO_SLIDE_SPEED = 8;
+constexpr uint8_t MENU_SLIDE_SPEED = 12;
+constexpr uint8_t MENU_STEP_DELAY = 3;
 
 //const char* text="This is a text Hello world ! follow up one two three four may jun july";
 
@@ -607,39 +618,6 @@ void text_edit(bool dir, uint8_t index) {
   }
 }
 
-//消失函数
-void disappear() {
-  switch (disappear_step) {
-    case 1:
-      for (uint16_t i = 0; i < buf_len; ++i) {
-        if (i % 2 == 0) buf_ptr[i] = buf_ptr[i] & 0x55;
-      }
-      break;
-    case 2:
-      for (uint16_t i = 0; i < buf_len; ++i) {
-        if (i % 2 != 0) buf_ptr[i] = buf_ptr[i] & 0xAA;
-      }
-      break;
-    case 3:
-      for (uint16_t i = 0; i < buf_len; ++i) {
-        if (i % 2 == 0) buf_ptr[i] = buf_ptr[i] & 0x00;
-      }
-      break;
-    case 4:
-      for (uint16_t i = 0; i < buf_len; ++i) {
-        if (i % 2 != 0) buf_ptr[i] = buf_ptr[i] & 0x00;
-      }
-      break;
-    default:
-      ui_state = S_NONE;
-      disappear_step = 0;
-      break;
-  }
-  disappear_step++;
-}
-
-
-
 // ============================================================================
 // == Section: UI Rendering ===================================================
 // ============================================================================
@@ -834,6 +812,131 @@ void about_ui_show() {
   u8g2.drawStr(2, 60, "Sensor : R60A");
 }
 
+int16_t menu_transition_offset(uint8_t index, bool entering) {
+  uint16_t delay = static_cast<uint16_t>(index) * MENU_STEP_DELAY;
+  if (transition.step <= delay) {
+    return entering ? 128 : 0;
+  }
+
+  uint16_t progress = static_cast<uint16_t>(transition.step - delay) * MENU_SLIDE_SPEED;
+  if (progress > 128) progress = 128;
+
+  return entering ? static_cast<int16_t>(128 - progress) : static_cast<int16_t>(progress);
+}
+
+bool animate_logo_transition(bool entering) {
+  uint16_t progress = static_cast<uint16_t>(transition.step) * LOGO_SLIDE_SPEED;
+  if (progress > 128) progress = 128;
+
+  int16_t offset = entering ? static_cast<int16_t>(128 - progress) : static_cast<int16_t>(progress);
+  if (offset < 0) offset = 0;
+  if (offset > 128) offset = 128;
+
+  if (offset < 128) {
+    u8g2.drawXBMP(offset, 0, 128, 64, LOGO);
+  }
+
+  return entering ? (offset == 0) : (offset == 128);
+}
+
+bool animate_select_transition(bool entering) {
+  bool completed = true;
+
+  int16_t highlightOffset = menu_transition_offset(ui_select, entering);
+  if ((entering && highlightOffset > 0) || (!entering && highlightOffset < 128)) {
+    completed = false;
+  }
+
+  u8g2.setDrawColor(2);
+  if (highlightOffset < 128) {
+    u8g2.drawRBox(highlightOffset, box_y, box_width, 16, 1);
+  }
+  u8g2.setDrawColor(1);
+
+  u8g2.drawVLine(126, 0, total_line_length);
+  u8g2.drawPixel(125, 0);
+  u8g2.drawPixel(127, 0);
+
+  for (uint8_t i = 0; i < list_num; ++i) {
+    int16_t offset = menu_transition_offset(i, entering);
+    if ((entering && offset > 0) || (!entering && offset < 128)) {
+      completed = false;
+    }
+
+    int16_t textX = x + offset;
+    int16_t baseY = 16 * i + y + 12;
+    if (textX < 128) {
+      u8g2.drawStr(textX, baseY, list[i].label);
+    }
+    u8g2.drawPixel(125, single_line_length * (i + 1));
+    u8g2.drawPixel(127, single_line_length * (i + 1));
+  }
+
+  u8g2.drawVLine(125, line_y, single_line_length - 1);
+  u8g2.drawVLine(127, line_y, single_line_length - 1);
+
+  return completed;
+}
+
+void render_static_page(uint8_t page) {
+  switch (page) {
+    case M_LOGO:
+      logo_ui_show();
+      break;
+    case M_SELECT:
+      select_ui_show();
+      break;
+    case M_PID:
+      pid_ui_show();
+      break;
+    case M_ICON:
+      icon_ui_show();
+      break;
+    case M_CHART:
+      chart_ui_show();
+      break;
+    case M_TEXT_EDIT:
+      text_edit_ui_show();
+      break;
+    case M_PID_EDIT:
+      pid_ui_show();
+      for (uint16_t i = 0; i < buf_len; ++i) {
+        buf_ptr[i] = buf_ptr[i] & (i % 2 == 0 ? 0x55 : 0xAA);
+      }
+      pid_edit_ui_show();
+      break;
+    case M_ABOUT:
+      about_ui_show();
+      break;
+    default:
+      break;
+  }
+}
+
+bool animate_transition_page(uint8_t page, bool entering) {
+  switch (page) {
+    case M_LOGO:
+      return animate_logo_transition(entering);
+    case M_SELECT:
+      return animate_select_transition(entering);
+    default:
+      render_static_page(page);
+      return true;
+  }
+}
+
+void start_transition(uint8_t target) {
+  if (ui_state == S_DISAPPEAR || ui_state == S_APPEAR) {
+    transition.to = target;
+    return;
+  }
+
+  transition.from = ui_index;
+  transition.to = target;
+  transition.step = 0;
+  ui_state = S_DISAPPEAR;
+}
+
 // ============================================================================
 // == Section: UI State Machines ==============================================
 // ============================================================================
@@ -842,8 +945,7 @@ void logo_proc() {
   // Logo 界面处理逻辑
   if (key_msg.pressed) {
     key_msg.pressed = false;
-    ui_state = S_DISAPPEAR;
-    ui_index = M_SELECT;
+    start_transition(M_SELECT);
   }
   logo_ui_show();
 }
@@ -899,8 +1001,7 @@ void pid_proc() {
         break;
       case 2:
         if (pid_select == 3) {
-          ui_index = M_SELECT;
-          ui_state = S_DISAPPEAR;
+          start_transition(M_SELECT);
           pid_select = 0;
           pid_line_y = pid_line_y_trg = 1;
           pid_box_y = pid_box_y_trg = 0;
@@ -944,36 +1045,29 @@ void select_proc(void) {
       case 2:  // 按下按钮 2
         switch (ui_select) {
           case 0:  // return
-            ui_state = S_DISAPPEAR;
-            ui_index = M_LOGO;
+            start_transition(M_LOGO);
             break;
           case 1:  // PID
-            ui_state = S_DISAPPEAR;
-            ui_index = M_PID;
+            start_transition(M_PID);
             break;
           case 2:  // icon
-            ui_state = S_DISAPPEAR;
-            ui_index = M_ICON;
+            start_transition(M_ICON);
             break;
           case 3:  // chart
-            ui_state = S_DISAPPEAR;
-            ui_index = M_CHART;
+            start_transition(M_CHART);
             break;
           case 4:  // textedit
-            ui_state = S_DISAPPEAR;
-            ui_index = M_TEXT_EDIT;
+            start_transition(M_TEXT_EDIT);
             break;
           case 6:  // about
-            ui_state = S_DISAPPEAR;
-            ui_index = M_ABOUT;
+            start_transition(M_ABOUT);
             break;
           default:
             break;
         }
         break;
       case 3:  // 按下返回按钮（BTN3）
-        ui_state = S_DISAPPEAR;
-        ui_index = M_SELECT;
+        start_transition(M_SELECT);
         break;
       default:
         break;
@@ -1005,8 +1099,7 @@ void icon_proc(void) {
         }
         break;
       case 2:
-        ui_state = S_DISAPPEAR;
-        ui_index = M_SELECT;
+        start_transition(M_SELECT);
         icon_select = 0;
         icon_x = icon_x_trg = 0;
         app_y = app_y_trg = 0;
@@ -1022,8 +1115,7 @@ void chart_proc() {
   chart_ui_show();
   if (key_msg.pressed) {
     key_msg.pressed = false;
-    ui_state = S_DISAPPEAR;
-    ui_index = M_SELECT;
+    start_transition(M_SELECT);
     frame_is_drawed = false;  //退出后框架为未画状态
     chart_x = 0;
   }
@@ -1061,8 +1153,7 @@ void text_edit_proc() {
         break;
       case 2:
         if (edit_index == name_len) {
-          ui_state = S_DISAPPEAR;
-          ui_index = M_SELECT;
+          start_transition(M_SELECT);
           edit_index = 0;
         } else {
           edit_flag = !edit_flag;
@@ -1078,8 +1169,7 @@ void about_proc() {
   // 关于界面处理逻辑
   if (key_msg.pressed) {
     key_msg.pressed = false;
-    ui_state = S_DISAPPEAR;
-    ui_index = M_SELECT;
+    start_transition(M_SELECT);
   }
   about_ui_show();
 }
@@ -1121,9 +1211,27 @@ void ui_proc() {
           break;
       }
       break;
-    case S_DISAPPEAR:
-      disappear();
+    case S_DISAPPEAR: {
+      u8g2.clearBuffer();
+      if (animate_transition_page(transition.from, false)) {
+        ui_index = transition.to;
+        transition.step = 0;
+        ui_state = S_APPEAR;
+      } else {
+        transition.step += 1;
+      }
       break;
+    }
+    case S_APPEAR: {
+      u8g2.clearBuffer();
+      if (animate_transition_page(transition.to, true)) {
+        ui_state = S_NONE;
+        transition.step = 0;
+      } else {
+        transition.step += 1;
+      }
+      break;
+    }
     default:
       break;
   }
@@ -1164,6 +1272,9 @@ void setup() {
 
   ui_index = M_LOGO;
   ui_state = S_NONE;
+  transition.from = ui_index;
+  transition.to = ui_index;
+  transition.step = 0;
 }
 
 void loop() {
